@@ -12,35 +12,33 @@ if (!emailArg || !name || process.stdin.isTTY) {
 }
 const email = validEmail(emailArg),
   passwordHash = hashPassword(readFileSync(0, "utf8").replace(/\r?\n$/, ""));
-const store = createStore(
-  process.env.ENG_DATABASE || "data/eng-roofing.sqlite",
-);
+const store = await createStore();
 try {
-  const s = store.read();
-  let u = s.users.find((u) => u.email.toLowerCase() === email);
-  if (u && u.role !== "Admin")
-    throw new Error(
-      "This email belongs to a different role. Use account management.",
-    );
-  if (!u) {
-    u = {
-      id: `USR-${randomUUID()}`,
-      role: "Admin",
-      email,
-      rate: 0,
-      contact: "",
-      photo: "",
-    };
-    s.users.push(u);
-  }
-  Object.assign(u, {
-    name,
-    passwordHash,
-    active: true,
-    sessionVersion: (u.sessionVersion || 0) + 1,
+  await store.transaction(async (s) => {
+    let u = s.users.find((u) => u.email.toLowerCase() === email);
+    if (u && u.role !== "Admin")
+      throw new Error(
+        "This email belongs to a different role. Use account management.",
+      );
+    if (!u) {
+      u = {
+        id: `USR-${randomUUID()}`,
+        role: "Admin",
+        email,
+        rate: 0,
+        contact: "",
+        photo: "",
+      };
+      s.users.push(u);
+    }
+    Object.assign(u, {
+      name,
+      passwordHash,
+      active: true,
+      sessionVersion: (u.sessionVersion || 0) + 1,
+    });
   });
-  store.save(s);
   console.log("Administrator account saved. Existing sessions invalidated.");
 } finally {
-  store.close();
+  await store.close();
 }

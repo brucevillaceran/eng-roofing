@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createStore } from "./store.js";
+import { createStore } from "./test-database.js";
 import { createApi } from "./api.js";
 import { hashPassword, verifyPassword } from "./auth.js";
 import { apply } from "./domain.js";
@@ -9,8 +9,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 const password = "Synthetic-test-password-2026";
 async function setup(t, path = ":memory:") {
-  const store = createStore(path);
-  const state = store.read();
+  const store = await createStore(path);
+  const state = await store.read();
   state.users.push({
     id: "admin",
     name: "Test Admin",
@@ -22,13 +22,13 @@ async function setup(t, path = ":memory:") {
     passwordHash: hashPassword(password),
     rate: 0,
   });
-  store.save(state);
+  await store.save(state);
   const server = createApi(store).listen(0, "127.0.0.1");
   await new Promise((resolve) => server.once("listening", resolve));
   const base = `http://127.0.0.1:${server.address().port}`;
   t.after(async () => {
     await new Promise((resolve) => server.close(resolve));
-    store.close();
+    await store?.close();
   });
   const request = async (
     path,
@@ -136,7 +136,9 @@ async function project(env, users) {
     status: "For Inspection",
     foremanId: users.foreman.user.id,
   });
-  const i = env.store.read().inspections.find((i) => i.bookingId === b.id);
+  const i = (await env.store.read()).inspections.find(
+    (i) => i.bookingId === b.id,
+  );
   await env.action(users.foreman, "inspection", {
     id: i.id,
     date: booking.date,
@@ -158,13 +160,13 @@ async function project(env, users) {
     profile: "Rib-Type / Ribbed",
     active: "Active",
   });
-  const material = env.store.read().materials[0];
+  const material = (await env.store.read()).materials[0];
   await env.action(users.foreman, "estimate", {
     inspectionId: i.id,
     items: [{ materialId: material.id, quantity: 100 }],
     charges: 5000,
   });
-  const q = env.store.read().quotations[0];
+  const q = (await env.store.read()).quotations[0];
   await env.action(env.admin, "finalize", { id: q.id, downpayment: 10000 });
   await env.action(
     users.client2,
@@ -177,7 +179,7 @@ async function project(env, users) {
     token: b.token,
     status: "Approved",
   });
-  const p = env.store.read().projects[0];
+  const p = (await env.store.read()).projects[0];
   await env.action(env.admin, "project", {
     id: p.id,
     foremanId: users.foreman.user.id,
@@ -206,11 +208,13 @@ async function project(env, users) {
 
 test("empty database, hashed credentials, registration, sessions, CSRF and logout", async (t) => {
   const env = await setup(t);
-  assert.equal(env.store.read().projects.length, 0);
-  assert.equal(env.store.read().materials.length, 0);
-  assert.ok(verifyPassword(password, env.store.read().users[0].passwordHash));
+  assert.equal((await env.store.read()).projects.length, 0);
+  assert.equal((await env.store.read()).materials.length, 0);
+  assert.ok(
+    verifyPassword(password, (await env.store.read()).users[0].passwordHash),
+  );
   assert.equal(
-    verifyPassword("wrong", env.store.read().users[0].passwordHash),
+    verifyPassword("wrong", (await env.store.read()).users[0].passwordHash),
     false,
   );
   assert.equal(
@@ -360,13 +364,13 @@ test("multi-user end-to-end workflow, isolation, notifications, attendance and p
     due: "2099-10-10",
     progress: 20,
   });
-  const task = env.store.read().tasks[0];
+  const task = (await env.store.read()).tasks[0];
   await env.action(users.foreman, "progress", {
     projectId: p.id,
     progress: 40,
     notes: "Roof materials on site",
   });
-  const usage = env.store.read().usage[0];
+  const usage = (await env.store.read()).usage[0];
   await env.action(users.foreman, "usage", {
     projectId: p.id,
     id: usage.id,
@@ -386,7 +390,7 @@ test("multi-user end-to-end workflow, isolation, notifications, attendance and p
     latitude: 14.6,
     longitude: 121,
   });
-  let state = env.store.read(),
+  let state = await env.store.read(),
     attendance = state.attendance[0];
   assert.equal(attendance.userId, users.employee.user.id);
   assert.equal((await own(users.employee2)).attendance.length, 0);
@@ -395,7 +399,7 @@ test("multi-user end-to-end workflow, isolation, notifications, attendance and p
     false,
   );
   attendance.checkIn = new Date(Date.now() - 8 * 3600000).toISOString();
-  env.store.save(state); // Synthetic clock fixture, no real personnel or biometric data.
+  await env.store.save(state); // Synthetic clock fixture, no real personnel or biometric data.
   await env.action(users.employee, "attendance", {
     descriptor,
     latitude: 14.6,
@@ -407,7 +411,7 @@ test("multi-user end-to-end workflow, isolation, notifications, attendance and p
     to: "2099-12-31",
     deductions: 20,
   });
-  const payroll = env.store.read().payroll[0];
+  const payroll = (await env.store.read()).payroll[0];
   await env.action(env.admin, "payrollUpdate", {
     id: payroll.id,
     deductions: 30,
@@ -501,11 +505,13 @@ test("multi-user end-to-end workflow, isolation, notifications, attendance and p
     rate: 99999,
   });
   assert.equal(
-    env.store.read().users.find((u) => u.id === users.employee.user.id).role,
+    (await env.store.read()).users.find((u) => u.id === users.employee.user.id)
+      .role,
     "Employee",
   );
   assert.equal(
-    env.store.read().users.find((u) => u.id === users.employee2.user.id).name,
+    (await env.store.read()).users.find((u) => u.id === users.employee2.user.id)
+      .name,
     "employee2",
   );
 });
@@ -513,9 +519,9 @@ test("multi-user end-to-end workflow, isolation, notifications, attendance and p
 test("account activation, unique emails, role changes, last admin and session revocation", async (t) => {
   const env = await setup(t),
     users = await accounts(env);
-  const employee = env.store
-    .read()
-    .users.find((u) => u.id === users.employee.user.id);
+  const employee = (await env.store.read()).users.find(
+    (u) => u.id === users.employee.user.id,
+  );
   await env.action(env.admin, "user", { ...employee, active: "Inactive" });
   assert.equal(
     (await env.request("/api/state", { identity: users.employee })).status,
@@ -557,7 +563,7 @@ test("account activation, unique emails, role changes, last admin and session re
     { ...employee, email: env.admin.user.email },
     400,
   );
-  const admin = env.store.read().users[0];
+  const admin = (await env.store.read()).users[0];
   await env.action(env.admin, "user", { ...admin, active: "Inactive" }, 400);
   await env.action(env.admin, "user", {
     ...employee,
@@ -565,7 +571,7 @@ test("account activation, unique emails, role changes, last admin and session re
     active: "Active",
   });
   assert.equal(
-    env.store.read().users.find((u) => u.id === employee.id).role,
+    (await env.store.read()).users.find((u) => u.id === employee.id).role,
     "Foreman",
   );
   const updated = await env.request("/api/auth/login", {
@@ -578,9 +584,9 @@ test("account activation, unique emails, role changes, last admin and session re
 
 test("sessions survive server restart, expire, and credentials never enter state", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "eng-auth-")),
-    path = join(dir, "test.sqlite");
-  const store = createStore(path),
-    s = store.read();
+    path = join(dir, "test.database-key");
+  const store = await createStore(path),
+    s = await store.read();
   s.users.push({
     id: "a",
     email: "a@example.test",
@@ -590,7 +596,7 @@ test("sessions survive server restart, expire, and credentials never enter state
     sessionVersion: 0,
     passwordHash: hashPassword(password),
   });
-  store.save(s);
+  await store.save(s);
   let server = createApi(store).listen(0, "127.0.0.1");
   await new Promise((resolve) => server.once("listening", resolve));
   let base = `http://127.0.0.1:${server.address().port}`;
@@ -601,13 +607,13 @@ test("sessions survive server restart, expire, and credentials never enter state
   });
   const cookie = response.headers.get("set-cookie").split(";")[0];
   await new Promise((resolve) => server.close(resolve));
-  store.close();
-  const reopened = createStore(path);
+  await store?.close();
+  const reopened = await createStore(path);
   server = createApi(reopened).listen(0, "127.0.0.1");
   await new Promise((resolve) => server.once("listening", resolve));
   t.after(async () => {
     await new Promise((resolve) => server.close(resolve));
-    reopened.close();
+    await reopened?.close();
     rmSync(dir, { recursive: true });
   });
   base = `http://127.0.0.1:${server.address().port}`;
@@ -618,7 +624,7 @@ test("sessions survive server restart, expire, and credentials never enter state
   const text = await state.text();
   assert.equal(text.includes("passwordHash"), false);
   assert.equal(text.includes("sessionVersion"), false);
-  reopened.db.prepare("UPDATE sessions SET expires=0").run();
+  await reopened.db.query("UPDATE sessions SET expires=0");
   assert.equal(
     (await fetch(base + "/api/state", { headers: { Cookie: cookie } })).status,
     401,
@@ -646,10 +652,11 @@ test("failed logins are rate limited, and forged direct domain actors are reject
     ).status,
     429,
   );
+  const domainState = await env.store.read();
   assert.throws(
     () =>
       apply(
-        env.store.read(),
+        domainState,
         "settings",
         { name: "Intruder" },
         { id: "missing", role: "Admin" },
@@ -661,7 +668,7 @@ test("failed logins are rate limited, and forged direct domain actors are reject
 test("legacy booking linking and administrative corrections preserve history", async (t) => {
   const env = await setup(t),
     users = await accounts(env);
-  let s = env.store.read();
+  let s = await env.store.read();
   s.bookings.push({
     id: "legacy",
     ...booking,
@@ -671,7 +678,7 @@ test("legacy booking linking and administrative corrections preserve history", a
     token: "legacy-token",
     submitted_at: new Date().toISOString(),
   });
-  env.store.save(s);
+  await env.store.save(s);
   await env.action(
     users.client,
     "bookingOwner",
@@ -694,14 +701,14 @@ test("legacy booking linking and administrative corrections preserve history", a
     200,
   );
   const { p } = await project(env, users);
-  const payment = env.store.read().payments[0];
+  const payment = (await env.store.read()).payments[0];
   await env.action(env.admin, "paymentUpdate", {
     id: payment.id,
     remarks: "Verified receipt",
   });
-  assert.equal(env.store.read().payments[0].amount, payment.amount);
+  assert.equal((await env.store.read()).payments[0].amount, payment.amount);
   assert.equal(
-    env.store.read().payments[0].annotations[0].remarks,
+    (await env.store.read()).payments[0].annotations[0].remarks,
     "Verified receipt",
   );
   await env.action(env.admin, "notification", {
@@ -710,11 +717,12 @@ test("legacy booking linking and administrative corrections preserve history", a
     message: "One recipient",
   });
   assert.equal(
-    env.store.read().notifications.filter((n) => n.title === "Private note")
-      .length,
+    (await env.store.read()).notifications.filter(
+      (n) => n.title === "Private note",
+    ).length,
     1,
   );
-  s = env.store.read();
+  s = await env.store.read();
   s.attendance.push({
     id: "correction",
     userId: users.employee.user.id,
@@ -725,18 +733,23 @@ test("legacy booking linking and administrative corrections preserve history", a
     checkOut: "2026-10-04T07:00:00.000Z",
     verified: true,
   });
-  env.store.save(s);
+  await env.store.save(s);
   await env.action(env.admin, "attendanceUpdate", {
     id: "correction",
     hours: 8,
     reason: "Approved correction",
   });
-  assert.equal(env.store.read().attendance[0].corrections[0].previousHours, 7);
+  assert.equal(
+    (await env.store.read()).attendance[0].corrections[0].previousHours,
+    7,
+  );
   await env.action(
     env.admin,
     "user",
     {
-      ...env.store.read().users.find((u) => u.id === users.foreman.user.id),
+      ...(await env.store.read()).users.find(
+        (u) => u.id === users.foreman.user.id,
+      ),
       role: "Employee",
     },
     400,
@@ -781,13 +794,13 @@ test("profile password changes verify old credentials and revoke existing sessio
   );
 });
 
-test("registering a legacy guest email never claims its records on restart", () => {
+test("registering a legacy guest email never claims its records on restart", async () => {
   const dir = mkdtempSync(join(tmpdir(), "eng-migration-")),
-    path = join(dir, "migration.sqlite");
+    path = join(dir, "migration.database-key");
   let store;
   try {
-    store = createStore(path);
-    const s = store.read();
+    store = await createStore(path);
+    const s = await store.read();
     s.bookings.push({
       id: "guest",
       ...booking,
@@ -805,12 +818,12 @@ test("registering a legacy guest email never claims its records on restart", () 
       sessionVersion: 0,
       passwordHash: hashPassword(password),
     });
-    store.save(s);
-    store.close();
-    store = createStore(path);
-    assert.equal(store.read().bookings[0].clientId, undefined);
+    await store.save(s);
+    await store?.close();
+    store = await createStore(path);
+    assert.equal((await store.read()).bookings[0].clientId, undefined);
   } finally {
-    store?.close();
+    await store?.close();
     rmSync(dir, { recursive: true });
   }
 });
@@ -818,8 +831,8 @@ test("registering a legacy guest email never claims its records on restart", () 
 test("production authentication requires HTTPS origin and sets secure cookies", async (t) => {
   const previous = process.env.NODE_ENV;
   process.env.NODE_ENV = "production";
-  const store = createStore(":memory:"),
-    s = store.read();
+  const store = await createStore(":memory:"),
+    s = await store.read();
   s.users.push({
     id: "production-admin",
     name: "Admin",
@@ -829,12 +842,12 @@ test("production authentication requires HTTPS origin and sets secure cookies", 
     sessionVersion: 0,
     passwordHash: hashPassword(password),
   });
-  store.save(s);
+  await store.save(s);
   const server = createApi(store).listen(0, "127.0.0.1");
   await new Promise((resolve) => server.once("listening", resolve));
   t.after(async () => {
     await new Promise((resolve) => server.close(resolve));
-    store.close();
+    await store?.close();
     if (previous === undefined) delete process.env.NODE_ENV;
     else process.env.NODE_ENV = previous;
   });
@@ -851,13 +864,13 @@ test("production authentication requires HTTPS origin and sets secure cookies", 
   assert.match(response.headers.get("set-cookie"), /Secure/);
 });
 
-test("missing company settings are repaired without replacing existing records", () => {
+test("missing company settings are repaired without replacing existing records", async () => {
   const dir = mkdtempSync(join(tmpdir(), "eng-settings-")),
-    path = join(dir, "settings.sqlite");
+    path = join(dir, "settings.database-key");
   let store;
   try {
-    store = createStore(path);
-    const s = store.read();
+    store = await createStore(path);
+    const s = await store.read();
     s.users.push({
       id: "existing",
       name: "Existing Client",
@@ -875,16 +888,57 @@ test("missing company settings are repaired without replacing existing records",
       status: "Pending",
       token: "existing-token",
     });
-    s.settings = [];
-    store.save(s);
-    store.close();
-    store = createStore(path, { sample: true });
-    assert.equal(store.read().users.length, 1);
-    assert.equal(store.read().bookings[0].id, "existing-booking");
-    assert.equal(store.read().settings.length, 1);
-    assert.equal(store.read().projects.length, 0);
+    await store.save(s);
+    await store.db.query("DELETE FROM settings");
+    await store?.close();
+    store = await createStore(path, { sample: true });
+    assert.equal((await store.read()).users.length, 1);
+    assert.equal((await store.read()).bookings[0].id, "existing-booking");
+    assert.equal((await store.read()).settings.length, 1);
+    assert.equal((await store.read()).projects.length, 0);
   } finally {
-    store?.close();
+    await store?.close();
     rmSync(dir, { recursive: true });
   }
+});
+
+test("concurrent HTTP bookings persist independently and simultaneous payments cannot overpay", async (t) => {
+  const env = await setup(t),
+    users = await accounts(env);
+  await Promise.all(
+    Array.from({ length: 12 }, (_, i) =>
+      env.action(users.client, "book", {
+        ...booking,
+        description: `Concurrent ${i}`,
+      }),
+    ),
+  );
+  assert.equal((await env.store.read()).bookings.length, 12);
+  // The workflow helper expects its quotation/project first, independently of booking order.
+  await project(env, users);
+  const projectId = (await env.store.read()).projects[0].id;
+  const responses = await Promise.all(
+    [1, 2].map((i) =>
+      env.request("/api/action", {
+        method: "POST",
+        identity: env.admin,
+        data: {
+          action: "payment",
+          data: {
+            projectId,
+            amount: 30000,
+            method: "Cash",
+            date: "2026-10-04",
+            reference: `Concurrent ${i}`,
+            remarks: "Concurrent payment",
+          },
+        },
+      }),
+    ),
+  );
+  assert.deepEqual(responses.map((r) => r.status).sort(), [200, 400]);
+  assert.equal(
+    (await env.store.read()).payments.reduce((n, p) => n + p.amount, 0),
+    40000,
+  );
 });
