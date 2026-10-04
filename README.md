@@ -15,7 +15,7 @@ Requires **Node.js 24+**, npm, and MySQL 8+ or MariaDB 10.4+ (verified with Mari
    CREATE DATABASE eng_roofing CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
    ```
 
-3. Select `eng_roofing`, choose **Import**, and import **database/schema.sql**. The schema uses `CREATE TABLE IF NOT EXISTS`; it does not drop tables or delete existing data. Do not import into an unrelated application's database.
+3. Select `eng_roofing`, choose **Import**, and import **database/schema.sql**. The schema uses `CREATE TABLE IF NOT EXISTS`; it does not drop tables or delete existing data. For an existing ENG Roofing database, use `npm run db:init` instead of importing SQL so legacy table casing is handled safely. Do not import into an unrelated application's database.
 4. In the repository folder, copy `.env.example` to `.env` (Windows Command Prompt: `copy .env.example .env`; macOS/Linux: `cp .env.example .env`). Configure:
 
    ```dotenv
@@ -37,7 +37,7 @@ Requires **Node.js 24+**, npm, and MySQL 8+ or MariaDB 10.4+ (verified with Mari
    npm run db:check
    ```
 
-   As an alternative to phpMyAdmin's schema import, run `npm run db:init` once after creating the database. It is safe to rerun; it does not reset data. Company settings are initialized on first application startup, without sample accounts/business records.
+   As an alternative to phpMyAdmin's schema import, run `npm run db:init` once after creating the database. It is safe to rerun; it does not reset data. Startup also initializes missing tables automatically. `npm run db:check` checks all 28 required tables and their columns without changing data. Company settings are initialized on first application startup, without sample accounts/business records.
 
 6. If migrating existing SQLite records, follow the migration instructions below **before creating any new users or records**. Otherwise create the first Admin as described below.
 7. Start the application:
@@ -54,7 +54,9 @@ Requires **Node.js 24+**, npm, and MySQL 8+ or MariaDB 10.4+ (verified with Mari
 
 - `ECONNREFUSED`: start XAMPP MySQL and check `DB_HOST`/`DB_PORT`. Use `127.0.0.1` if your localhost resolution differs from the server's TCP bind address.
 - Access denied: correct `DB_USER`/`DB_PASSWORD` and grant access to `DB_NAME`.
-- Unknown database/table: create the database, select it before importing `database/schema.sql`, then run `npm run db:check`.
+- Unknown database: create the database in phpMyAdmin and verify `DB_NAME`. Missing tables are initialized by startup or `npm run db:init`; neither command recreates the database.
+- Schema permission error: run `npm run db:init` with a local database account allowed to CREATE tables and, for legacy casing repair, ALTER/DROP for RENAME TABLE. A current schema needs no DDL privileges at startup.
+- `userpayrollarchive` missing: update the project files, stop Node, start XAMPP MySQL, then run `npm run db:init`, `npm run db:check`, and `npm run dev`. No manual SQL import or SQLite reimport is needed. See the upgrade notes below.
 - Large media uploads: configure MySQL/MariaDB `max_allowed_packet=64M` or higher in XAMPP's `my.ini`, then restart MySQL. Express retains the existing 12 MB request limit; facial descriptors and photos remain server-persisted.
 - Never run two different versions of the application against the same data during migration.
 
@@ -117,7 +119,23 @@ Business fields have individual SQL columns and relationships have foreign keys.
 
 ## Validation and Employee enrollment
 
-After updating an existing installation, stop Node, run `npm run db:init` (or reimport `database/schema.sql` in phpMyAdmin), then restart `npm run dev`. This adds the private `userPayrollArchive` table without deleting users or historical records. Startup moves existing non-Employee daily rates and facial descriptors into this archive and clears their active account fields. Attendance, payroll, payments, and unrelated profile information remain intact. The archive is never returned by the application API; protect it like other biometric database records. This cleanup is idempotent and also applies to permitted role changes.
+After updating an existing installation, stop Node, start XAMPP MySQL, confirm `.env` points to `eng_roofing`, and run:
+
+```bash
+npm run db:init
+npm run db:check
+npm run dev
+```
+
+No manual SQL import is needed. Startup also performs the same safe schema preparation before loading application records, so `npm run dev` repairs a missing archive table automatically when the database account has the required permissions. The database itself must already exist. No new environment variables are needed.
+
+The physical SQL table is now consistently **`userpayrollarchive`** (lowercase); the internal JavaScript collection remains `userPayrollArchive`. This table was introduced by the Employee-only enrollment change **after** the initial SQLite-to-MySQL migration. Earlier databases therefore lack it unless upgraded. The old startup checked only `app_state` before reading every collection, and the old connection check did not detect the missing archive.
+
+`server/database-schema.js`, used by startup and `scripts/database.js`, compares all entity, relationship/history, session, login-attempt, migration and revision tables with `database/schema.sql`. It creates only missing tables in foreign-key order under a database-specific initialization lock. On a case-sensitive server it renames an existing mixed-case archive to the lowercase name without copying or deleting records. On case-insensitive XAMPP configurations the lowercase name already resolves correctly. If both names exist on a case-sensitive server, it refuses to guess: preserve both tables and resolve the duplicate before retrying. Existing tables with missing columns are reported explicitly; the initializer does not fabricate values or overwrite incompatible structures. DDL may commit independently, so a failed initialization can safely be retried after its reported cause is corrected.
+
+The archive definition in `database/schema.sql` includes a 64-character ID primary key, `_position`, indexed `userId` foreign key to `users` with deletion restricted, the four-role enum, nullable `DOUBLE` rate and JSON descriptor, millisecond archive timestamp, and required JSON `_fields` metadata. Store code supplies ID, position, role, timestamp and metadata explicitly; nullable rate/descriptor permit archiving either attribute independently. Rates retain the same numeric representation as existing payroll snapshots.
+
+Startup moves existing non-Employee daily rates and facial descriptors into this private archive and clears their active account fields. Attendance, payroll, payments, and unrelated profile information remain intact. The archive is never returned by the application API; protect it like other biometric database records. This cleanup is idempotent and also applies to permitted role changes.
 
 Only **Employee** accounts have a daily rate and attendance face enrollment. Add User displays both fields only for Employee; a new Employee requires a positive rate and a captured face before the account is saved. An existing valid Employee enrollment can be retained on edit. Admin, Foreman, and Client requests containing either payroll field are rejected, as are attempts to enroll them or create new attendance/payroll for them. Foremen continue managing assigned projects and tasks. Historical payroll remains preserved for authorized inspection.
 

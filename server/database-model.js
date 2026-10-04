@@ -112,6 +112,10 @@ export const children = [
 }));
 export const tables = Object.keys(models);
 export const quote = (name) => "`" + name + "`";
+// Keep application/legacy collection names stable while SQL names stay portable.
+export const tableName = (name) =>
+  name === "userPayrollArchive" ? "userpayrollarchive" : name;
+export const quoteTable = (name) => quote(tableName(name));
 export const defaultSettings = {
   id: "company",
   name: "ENG Roofing Supply & Installation Services",

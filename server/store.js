@@ -1,10 +1,11 @@
 import { archiveNonEmployeePayroll } from "./payroll-fields.js";
-import { createPool } from "./database.js";
+import { createPool, initializeSchema } from "./database.js";
 import {
   models,
   children,
   tables,
   quote as q,
+  quoteTable as qt,
   encode,
   decode,
   defaultSettings,
@@ -13,11 +14,11 @@ const revision = Symbol("database revision");
 export async function createStore(config = {}) {
   const db = createPool(config);
   try {
-    await db.query("SELECT revision FROM app_state WHERE id=1");
+    await initializeSchema(db);
   } catch (error) {
     await db.end();
     throw new Error(
-      "Database unavailable or uninitialized. Check .env and run npm run db:init.",
+      `Database startup failed: ${error.message}. Check .env and run npm run db:init with a database account allowed to create missing tables.`,
       { cause: error },
     );
   }
@@ -28,13 +29,13 @@ export async function createStore(config = {}) {
     const state = {};
     for (const table of tables) {
       const [rows] = await connection.query(
-        `SELECT * FROM ${q(table)} ORDER BY _position`,
+        `SELECT * FROM ${qt(table)} ORDER BY _position`,
       );
       state[table] = rows.map((row) => decode(row, models[table]));
     }
     for (const c of children) {
       const [rows] = await connection.query(
-        `SELECT * FROM ${q(c.table)} ORDER BY _position`,
+        `SELECT * FROM ${qt(c.table)} ORDER BY _position`,
       );
       const grouped = new Map();
       for (const row of rows) {
@@ -44,7 +45,7 @@ export async function createStore(config = {}) {
       }
       // Preserve absent legacy collection properties as well as empty arrays.
       const [parents] = await connection.query(
-        `SELECT id, _fields FROM ${q(c.parent)}`,
+        `SELECT id, _fields FROM ${qt(c.parent)}`,
       );
       const present = new Set(
         parents
@@ -97,7 +98,7 @@ export async function createStore(config = {}) {
         ];
         if (old)
           await connection.execute(
-            `UPDATE ${q(table)} SET ${cols
+            `UPDATE ${qt(table)} SET ${cols
               .slice(1)
               .map((k) => `${q(k)}=?`)
               .join(",")} WHERE id=?`,
@@ -105,7 +106,7 @@ export async function createStore(config = {}) {
           );
         else
           await connection.execute(
-            `INSERT INTO ${q(table)} (${cols.map(q).join(",")}) VALUES (${cols.map(() => "?").join(",")})`,
+            `INSERT INTO ${qt(table)} (${cols.map(q).join(",")}) VALUES (${cols.map(() => "?").join(",")})`,
             values,
           );
       }
@@ -119,7 +120,7 @@ export async function createStore(config = {}) {
         )
           continue;
         await connection.execute(
-          `DELETE FROM ${q(c.table)} WHERE ${q(c.parentKey)}=?`,
+          `DELETE FROM ${qt(c.table)} WHERE ${q(c.parentKey)}=?`,
           [parent.id],
         );
         const cols = [
@@ -131,7 +132,7 @@ export async function createStore(config = {}) {
         for (const [position, item] of (parent[c.property] || []).entries()) {
           const row = c.scalar ? { [c.scalar]: item } : item;
           await connection.execute(
-            `INSERT INTO ${q(c.table)} (${cols.map(q).join(",")}) VALUES (${cols.map(() => "?").join(",")})`,
+            `INSERT INTO ${qt(c.table)} (${cols.map(q).join(",")}) VALUES (${cols.map(() => "?").join(",")})`,
             [parent.id, position, ...encode(row, c.fields)],
           );
         }
