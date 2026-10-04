@@ -55,6 +55,9 @@ export function visibleState(s, user) {
             photo: u.photo,
             initials: u.initials,
             ...(foreman || client ? { contact: u.contact } : {}),
+            ...(foreman && u.role === "Employee"
+              ? { active: u.active, enrolled: safeUser(u).enrolled }
+              : {}),
           },
     );
   const materialIds = new Set(
@@ -116,8 +119,16 @@ export function visibleState(s, user) {
       admin || foreman
         ? s.usage.filter((u) => admin || projectIds.has(u.projectId))
         : [],
-    attendance: s.attendance.filter((a) => admin || a.userId === user.id),
-    payroll: s.payroll.filter((p) => admin || p.userId === user.id),
+    attendance: s.attendance.filter(
+      (a) =>
+        admin ||
+        (foreman
+          ? projectIds.has(a.projectId)
+          : user.role === "Employee" && a.userId === user.id),
+    ),
+    payroll: s.payroll.filter(
+      (p) => admin || (user.role === "Employee" && p.userId === user.id),
+    ),
     payments: s.payments.filter(
       (p) => admin || (client && projectIds.has(p.projectId)),
     ),

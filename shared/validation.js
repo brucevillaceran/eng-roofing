@@ -252,7 +252,7 @@ export const actionRoles = {
   feedbackReview: ["Admin"],
   notification: ["Admin"],
   enroll: ["Admin"],
-  attendance: ["Employee"],
+  attendance: ["Foreman"],
   payroll: ["Admin"],
   payrollPaid: ["Admin"],
   read: roles,
@@ -285,7 +285,8 @@ const schemas = {
   feedbackReview: "id notes",
   notification: "userId title message",
   enroll: "userId descriptor",
-  attendance: "descriptor latitude longitude",
+  attendance:
+    "projectId userId operation attendanceId descriptor latitude longitude",
   payroll: "userId from to deductions",
   payrollPaid: "id",
   read: "",
@@ -576,8 +577,10 @@ export function validateAction(action, input, { state, user } = {}) {
       str("notes", "Site update");
       break;
     case "attendanceUpdate":
-      num("hours", "Verified hours", { max: 8 });
-      str("reason", "Correction reason");
+      fail(
+        "hours",
+        "Manual attendance hour overrides are not allowed. Hours come from verified Time In and Time Out.",
+      );
       break;
     case "payrollUpdate":
       num("deductions", "Deductions");
@@ -599,6 +602,15 @@ export function validateAction(action, input, { state, user } = {}) {
         d.descriptor,
         action === "attendance" ? "Face verification" : "Face enrollment",
       );
+      if (action === "attendance") {
+        d.projectId = identifier(d.projectId, "Project");
+        d.userId = identifier(d.userId, "Employee");
+        select("operation", "Attendance action", ["timeIn", "timeOut"]);
+        if (d.operation === "timeOut")
+          d.attendanceId = identifier(d.attendanceId, "Active attendance");
+        else if (has("attendanceId"))
+          fail("attendanceId", "Time In must start a new attendance record.");
+      }
       if (action === "attendance")
         for (const [k, max] of [
           ["latitude", 90],

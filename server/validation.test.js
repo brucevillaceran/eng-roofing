@@ -271,7 +271,7 @@ test("real API rejects invalid fields and enforces all four account-role combina
       400,
     );
   }
-  for (const role of ["Foreman", "Client", "Admin"])
+  for (const role of ["Employee", "Client", "Admin"])
     await env.action(
       "attendance",
       { descriptor, latitude: 14, longitude: 121 },
