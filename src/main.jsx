@@ -2,6 +2,7 @@ import React, {
   useState,
   useEffect,
   useRef,
+  useId,
   createContext,
   useContext,
 } from "react";
@@ -72,13 +73,21 @@ import {
 import QRCode from "qrcode";
 import { profiles, accessories } from "../shared/roofing.js";
 import "./style.css";
+import {
+  validateAction,
+  validateAuth,
+  photoValue,
+  identifier,
+} from "../shared/validation.js";
+import { fieldConstraints, checkField, checkForm } from "./form-validation.js";
 const Ctx = createContext();
 const useApp = () => useContext(Ctx);
 const money = (n) =>
   new Intl.NumberFormat("en-PH", {
     style: "currency",
     currency: "PHP",
-    maximumFractionDigits: 0,
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
   }).format(n || 0);
 const day = (d) =>
   d
@@ -134,8 +143,6 @@ const allowed = {
     "Tasks",
     "Project Progress",
     "Material Usage",
-    "Payroll",
-    "Attendance",
     "Notifications",
     "Profile",
   ],
@@ -214,6 +221,30 @@ function Field({
   children,
   ...props
 }) {
+  const [error, setError] = useState("");
+  const errorId = useId();
+  const constraints = fieldConstraints({
+    name,
+    label,
+    type,
+    required,
+    options,
+    ...props,
+  });
+  const validationProps = {
+    ...constraints,
+    ...props,
+    "aria-invalid": !!error,
+    "aria-describedby": error ? errorId : props["aria-describedby"],
+    onInput: (e) => {
+      setError(checkField(e.currentTarget) || "");
+      props.onInput?.(e);
+    },
+    onBlur: (e) => {
+      setError(checkField(e.currentTarget, true) || "");
+      props.onBlur?.(e);
+    },
+  };
   return (
     <label className={`field ${type === "textarea" ? "full" : ""}`}>
       <span>
@@ -225,7 +256,7 @@ function Field({
           name={name}
           defaultValue={value ?? ""}
           required={required}
-          {...props}
+          {...validationProps}
         >
           {!value && <option value="">Select {label.toLowerCase()}</option>}
           {options.map((o) => (
@@ -243,7 +274,7 @@ function Field({
           defaultValue={value}
           required={required}
           rows={3}
-          {...props}
+          {...validationProps}
         />
       ) : (
         <input
@@ -251,10 +282,15 @@ function Field({
           type={type}
           defaultValue={value}
           required={required}
-          {...props}
+          {...validationProps}
         />
       )}{" "}
       {children}
+      {error && (
+        <small id={errorId} className="field-error" role="alert">
+          {error}
+        </small>
+      )}
     </label>
   );
 }
@@ -269,11 +305,13 @@ function Form({
     [error, setError] = useState("");
   return (
     <form
+      noValidate
       onSubmit={async (e) => {
         e.preventDefault();
         setBusy(true);
         setError("");
         try {
+          checkForm(e.currentTarget);
           await onSubmit(Object.fromEntries(new FormData(e.currentTarget)));
         } catch (e) {
           setError(e.message);
@@ -379,6 +417,7 @@ function Authentication({ onDone }) {
         <Form
           submit={register ? "Register" : "Sign in"}
           onSubmit={async (d) => {
+            d = validateAuth(register ? "register" : "login", d);
             const res = await fetch(
               `/api/auth/${register ? "register" : "login"}`,
               {
@@ -533,6 +572,7 @@ function App() {
     }
   }, [toast]);
   const act = async (action, data, keep = false) => {
+    data = validateAction(action, data, { state, user: session?.user });
     const r = await fetch("/api/action", {
       method: "POST",
       headers: {
@@ -763,7 +803,11 @@ function App() {
                 onClick={async () => {
                   const response = await fetch("/api/auth/logout", {
                     method: "POST",
-                    headers: { "x-csrf-token": session.csrf },
+                    headers: {
+                      "Content-Type": "application/json",
+                      "x-csrf-token": session.csrf,
+                    },
+                    body: "{}",
                   });
                   if (response.ok) {
                     setSession(null);
@@ -1208,7 +1252,7 @@ function Dashboard() {
             </div>
           </section>
         )}
-        {["Admin", "Foreman", "Employee"].includes(user.role) && (
+        {["Admin", "Employee"].includes(user.role) && (
           <section className="card payroll-mini">
             <CardHead
               title="Payroll overview"
@@ -1779,8 +1823,12 @@ function ModulePage({ page }) {
                     <Badge>{u.active === false ? "Disabled" : "Active"}</Badge>
                   </div>,
                   <Name name={u.email} sub={u.contact} />,
-                  u.rate ? money(u.rate) : "—",
-                  u.enrolled ? "Enrolled" : "Not enrolled",
+                  u.role === "Employee" ? money(u.rate) : "Not applicable",
+                  u.role === "Employee"
+                    ? u.enrolled
+                      ? "Enrolled"
+                      : "Enrollment required"
+                    : "Not applicable",
                   <div className="row-actions">
                     <Button
                       variant="small secondary"
@@ -1788,7 +1836,7 @@ function ModulePage({ page }) {
                     >
                       Edit
                     </Button>
-                    {["Employee", "Foreman"].includes(u.role) && (
+                    {u.role === "Employee" && (
                       <Button
                         variant="small secondary"
                         onClick={() => setModal({ type: "enroll", record: u })}
@@ -2333,6 +2381,106 @@ function Profile({ user }) {
     </section>
   );
 }
+function UserAccountForm({ record }) {
+  const { act } = useApp();
+  const [role, setRole] = useState(record?.role || "Employee");
+  const [descriptor, setDescriptor] = useState(null);
+  const [photos, setPhotos] = useState(record?.photo ? [record.photo] : []);
+  const enrolled =
+    role === "Employee" && record?.role === "Employee" && record.enrolled;
+  return (
+    <Form
+      onSubmit={(d) =>
+        act("user", {
+          ...d,
+          id: record?.id,
+          photo: photos[0] || "",
+          ...(role === "Employee" && descriptor ? { descriptor } : {}),
+        })
+      }
+    >
+      <Field label="Full name" name="name" value={record?.name} required />
+      <Field
+        label="Role"
+        name="role"
+        value={role}
+        options={["Admin", "Foreman", "Employee", "Client"]}
+        required
+        onChange={(e) => {
+          setRole(e.target.value);
+          setDescriptor(null);
+        }}
+      />
+      <Field
+        label="Email"
+        name="email"
+        type="email"
+        value={record?.email}
+        required
+      />
+      <Field
+        label="Contact number"
+        name="contact"
+        value={record?.contact}
+        required
+      />
+      {role === "Employee" && (
+        <>
+          <Field
+            label="Daily rate (₱)"
+            name="rate"
+            type="number"
+            min="0.01"
+            max="100000"
+            step="0.01"
+            value={record?.role === "Employee" ? record.rate : ""}
+            required
+          />
+          <section
+            className="full"
+            aria-label="Required employee face enrollment"
+          >
+            <h4>Face enrollment *</h4>
+            {descriptor ? (
+              <p className="info">
+                Face captured. Enrollment will be saved with this account.
+              </p>
+            ) : enrolled ? (
+              <p className="info">This Employee already has face enrollment.</p>
+            ) : (
+              <p>Capture the Employee’s face before saving the account.</p>
+            )}
+            {(!enrolled || descriptor) && (
+              <CameraCapture onCapture={setDescriptor} />
+            )}
+          </section>
+        </>
+      )}
+      <Field
+        label={
+          record
+            ? "New password (leave blank to keep existing)"
+            : "Initial password"
+        }
+        name="password"
+        type="password"
+        minLength="12"
+        maxLength="128"
+        autoComplete="new-password"
+        required={!record}
+      />
+      <Field
+        label="Account status"
+        name="active"
+        options={["Active", "Inactive"]}
+        value={record?.active === false ? "Inactive" : "Active"}
+        required
+      />
+      <PhotoUpload photos={photos} onChange={(p) => setPhotos(p.slice(-1))} />
+    </Form>
+  );
+}
+
 function ModalContent({ modal }) {
   const { s, user, act, setModal } = useApp();
   const close = () => setModal(null),
@@ -2427,7 +2575,7 @@ function ModalContent({ modal }) {
           submit="Update booking"
         >
           <Field label="Full name" name="name" value={r.name} required />
-          <Field label="Contact number" name="phone" value={r.phone} />
+          <Field label="Contact number" name="phone" value={r.phone} required />
           <Field
             label="Site address"
             name="address"
@@ -2537,6 +2685,7 @@ function ModalContent({ modal }) {
           />
           <Field
             label="Inspection date"
+            max={today()}
             name="date"
             type="date"
             value={r.date}
@@ -2730,62 +2879,7 @@ function ModalContent({ modal }) {
   }
   if (modal.type === "user") {
     title = r ? "Edit account" : "Create account";
-    content = (
-      <Form
-        onSubmit={(d) =>
-          act("user", { ...d, id: r?.id, photo: photos[0] || "" })
-        }
-      >
-        <Field label="Full name" name="name" value={r?.name} required />
-        <Field
-          label="Role"
-          name="role"
-          options={["Admin", "Foreman", "Employee", "Client"]}
-          value={r?.role || "Employee"}
-          required
-        />
-        <Field
-          label="Email"
-          name="email"
-          type="email"
-          value={r?.email}
-          required
-        />
-        <Field
-          label="Contact number"
-          name="contact"
-          value={r?.contact}
-          required
-        />
-        <Field
-          label="Daily rate (₱)"
-          name="rate"
-          type="number"
-          min="0"
-          step="0.01"
-          value={r?.rate || 0}
-        />
-        <Field
-          label={
-            r
-              ? "New password (leave blank to keep existing)"
-              : "Initial password"
-          }
-          name="password"
-          type="password"
-          minLength="12"
-          autoComplete="new-password"
-          required={!r}
-        />
-        <Field
-          label="Account status"
-          name="active"
-          options={["Active", "Inactive"]}
-          value={r?.active === false ? "Inactive" : "Active"}
-        />
-        <PhotoUpload photos={photos} onChange={(p) => setPhotos(p.slice(-1))} />
-      </Form>
-    );
+    content = <UserAccountForm record={r} />;
   }
   if (modal.type === "assignment") {
     title = "Manage roofing project";
@@ -3027,6 +3121,7 @@ function ModalContent({ modal }) {
                 />
                 <Field
                   label="Payment date"
+                  max={today()}
                   name="date"
                   type="date"
                   value={today()}
@@ -3105,7 +3200,7 @@ function ModalContent({ modal }) {
           label="Employee"
           name="userId"
           options={s.users
-            .filter((u) => ["Employee", "Foreman"].includes(u.role))
+            .filter((u) => u.role === "Employee")
             .map((u) => ({
               value: u.id,
               label: `${u.name} · ${money(u.rate)}/day`,
@@ -3123,6 +3218,7 @@ function ModalContent({ modal }) {
         />
         <Field
           label="Period start"
+          max={today()}
           name="from"
           type="date"
           value={today().slice(0, 8) + "01"}
@@ -3130,6 +3226,7 @@ function ModalContent({ modal }) {
         />
         <Field
           label="Period end"
+          max={today()}
           name="to"
           type="date"
           value={today()}
@@ -3356,6 +3453,7 @@ function PhotoUpload({ photos, onChange, disabled }) {
                     }),
                 ),
               );
+              values.forEach((value) => photoValue(value));
               onChange([...photos, ...values]);
             } catch (e) {
               setError(e.message);
@@ -3403,7 +3501,7 @@ function BookingForm({ onDone }) {
         label="Contact number"
         name="phone"
         type="tel"
-        placeholder="09XX XXX XXXX"
+        placeholder="09123456789"
         required
       />
       <Field
@@ -3495,13 +3593,17 @@ function QuotationEditor({ record, isNew }) {
           setError("");
           setBusy(true);
           try {
+            checkForm(e.currentTarget);
             const form = new FormData(e.currentTarget);
             await act(isNew ? "estimate" : "finalize", {
-              id: record.id,
-              inspectionId: record.id,
-              items,
-              charges: Number(charges),
-              downpayment: Number(downpayment),
+              ...(isNew
+                ? { inspectionId: record.id }
+                : { id: record.id, downpayment }),
+              items: items.map(({ materialId, quantity }) => ({
+                materialId,
+                quantity,
+              })),
+              charges,
               notes: form.get("notes"),
             });
           } catch (e) {
@@ -3526,6 +3628,8 @@ function QuotationEditor({ record, isNew }) {
                 <small>{x.unit}</small>
               </div>
               <input
+                max="1000000"
+                onInput={(e) => checkField(e.currentTarget)}
                 aria-label={`Quantity for ${x.name}`}
                 type="number"
                 min="0.01"
@@ -3595,6 +3699,8 @@ function QuotationEditor({ record, isNew }) {
           <div>
             <span>Additional charges (₱)</span>
             <input
+              max="1000000000"
+              onInput={(e) => checkField(e.currentTarget)}
               aria-label="Additional charges"
               type="number"
               min="0"
@@ -3612,6 +3718,7 @@ function QuotationEditor({ record, isNew }) {
             <div>
               <span>Requested downpayment (₱)</span>
               <input
+                onInput={(e) => checkField(e.currentTarget)}
                 aria-label="Requested downpayment"
                 type="number"
                 min="0"
@@ -4112,14 +4219,16 @@ function Attendance() {
     </>
   );
 }
-function CameraCapture({ enrollUser }) {
+function CameraCapture({ enrollUser, onCapture }) {
   const { user, act, setModal } = useApp(),
     video = useRef(),
     stream = useRef(),
     active = useRef(true),
     api = useRef(),
     [status, setStatus] = useState(
-      "Camera and location permission are required.",
+      enrollUser || onCapture
+        ? "Camera permission is required for enrollment."
+        : "Camera and location permission are required.",
     ),
     [ready, setReady] = useState(false),
     [busy, setBusy] = useState(false),
@@ -4185,7 +4294,12 @@ function CameraCapture({ enrollUser }) {
       if (detections.length !== 1)
         throw new Error("Exactly one clearly visible face is required.");
       const descriptor = Array.from(detections[0].descriptor);
-      if (enrollUser)
+      if (onCapture) {
+        await onCapture(descriptor);
+        stream.current?.getTracks().forEach((t) => t.stop());
+        setReady(false);
+        setStatus("Face captured. Save the account to store enrollment.");
+      } else if (enrollUser)
         await act("enroll", { userId: enrollUser.id, descriptor });
       else {
         setStatus("Recording your location…");
@@ -4214,12 +4328,12 @@ function CameraCapture({ enrollUser }) {
       <p>{status}</p>
       {error && <div className="error">{error}</div>}
       <div className="info">
-        {enrollUser
+        {enrollUser || onCapture
           ? "Admin-supervised enrollment saves a 128-value face descriptor for this employee."
           : "Your face is compared with your enrolled descriptor. Your assigned project is selected automatically."}{" "}
         Face verification does not perform liveness detection.
       </div>
-      <Button disabled={busy} onClick={ready ? capture : start}>
+      <Button type="button" disabled={busy} onClick={ready ? capture : start}>
         {busy ? (
           <LoaderCircle className="spin" size={16} />
         ) : (
@@ -4228,7 +4342,7 @@ function CameraCapture({ enrollUser }) {
         {busy
           ? "Please wait…"
           : ready
-            ? enrollUser
+            ? enrollUser || onCapture
               ? "Save face enrollment"
               : "Verify & check in / out"
             : "Enable camera"}
@@ -4301,7 +4415,15 @@ function PublicPage({ initial }) {
                 .split("/track/")
                 .at(-1)
                 .split("?")[0];
-              if (token) location.href = `/track/${encodeURIComponent(token)}`;
+              try {
+                checkForm(e.currentTarget);
+                identifier(token, "Tracking token", 128);
+                location.href = `/track/${encodeURIComponent(token)}`;
+              } catch (error) {
+                const field = e.currentTarget.elements.token;
+                field.setCustomValidity(error.message);
+                field.reportValidity();
+              }
             }}
           >
             <Field

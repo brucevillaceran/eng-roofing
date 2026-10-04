@@ -1,3 +1,4 @@
+import { archiveNonEmployeePayroll } from "./payroll-fields.js";
 import { createPool } from "./database.js";
 import {
   models,
@@ -186,6 +187,7 @@ export async function createStore(config = {}) {
   try {
     await transaction((state) => {
       if (!state.settings.length) state.settings.push({ ...defaultSettings });
+      for (const user of state.users) archiveNonEmployeePayroll(state, user);
     });
   } catch (error) {
     await db.end();

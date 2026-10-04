@@ -69,7 +69,7 @@ function estimate(s) {
     "inspection",
     {
       id: i.id,
-      date: "2099-10-10",
+      date: new Date().toISOString().slice(0, 10),
       area: 120,
       linear: 40,
       sections: 2,
@@ -154,7 +154,7 @@ test("complete booking → inspection → quote → project → payment → feed
       projectId: p.id,
       amount: q.total,
       method: "Bank Transfer",
-      date: "2099-10-15",
+      date: new Date().toISOString().slice(0, 10),
       reference: "SYNTHETIC-PAY",
     },
     admin,
@@ -162,7 +162,10 @@ test("complete booking → inspection → quote → project → payment → feed
   apply(s, "complete", { id: p.id, requirements: true }, foreman);
   assert.equal(p.locked, true);
   assert.equal(balance(s, p), 0);
-  assert.throws(() => apply(s, "project", { id: p.id }, admin), /locked/);
+  assert.throws(
+    () => apply(s, "project", { id: p.id, status: "On Hold" }, admin),
+    /locked/,
+  );
   assert.ok(
     s.emails.some(
       (e) => e.path.includes(b.token) && e.subject.includes("feedback"),
@@ -199,7 +202,7 @@ test("booking timestamps, token uniqueness, validation and role permissions", ()
   assert.ok(!isNaN(Date.parse(a.submitted_at)));
   assert.throws(
     () => apply(s, "book", { ...booking(), date: "2020-01-01" }),
-    /past/,
+    /Preferred date/,
   );
   assert.throws(
     () => apply(s, "booking", { id: a.id, status: "Approved" }, employee),
@@ -207,13 +210,23 @@ test("booking timestamps, token uniqueness, validation and role permissions", ()
   );
   assert.throws(
     () => apply(s, "book", { ...booking(), service: "General Construction" }),
-    /roofing service/,
+    /Service/,
   );
 });
 test("prices are snapshots; admin changes quantities without replacing saved prices", () => {
   const s = seed(),
     { q } = estimate(s);
-  apply(s, "material", { ...s.materials[1], price: 999 }, admin);
+  apply(
+    s,
+    "material",
+    {
+      ...Object.fromEntries(
+        Object.entries(s.materials[1]).filter(([k]) => k !== "history"),
+      ),
+      price: 999,
+    },
+    admin,
+  );
   apply(
     s,
     "finalize",
@@ -265,12 +278,23 @@ test("payments reject overpayment, negatives and lock on final payment after com
     remaining = balance(s, p);
   assert.throws(
     () =>
-      apply(s, "payment", { projectId: p.id, amount: remaining + 0.01 }, admin),
+      apply(
+        s,
+        "payment",
+        {
+          projectId: p.id,
+          amount: remaining + 0.01,
+          method: "Cash",
+          date: "2026-10-04",
+          reference: "TEST",
+        },
+        admin,
+      ),
     /exceed/,
   );
   assert.throws(
     () => apply(s, "payment", { projectId: p.id, amount: -1 }, admin),
-    /at least/,
+    /from/,
   );
   s.tasks
     .filter((t) => t.projectId === p.id)
@@ -295,7 +319,14 @@ test("feedback only after completion, all ratings in range", () => {
   const s = seed();
   assert.throws(
     () =>
-      apply(s, "feedback", { projectId: "PRJ-001", token: "sample-track-1" }),
+      apply(s, "feedback", {
+        projectId: "PRJ-001",
+        token: "sample-track-1",
+        installation: 5,
+        service: 5,
+        timeliness: 5,
+        professionalism: 5,
+      }),
     /completion/,
   );
   s.feedback = [];
@@ -353,7 +384,7 @@ test("facial descriptor enrollment, match, geotag, automatic assignment and chec
   );
   assert.throws(
     () => apply(s, "attendance", { descriptor }, employee),
-    /Location/,
+    /location/,
   );
   const a = apply(
     s,
@@ -410,7 +441,7 @@ test("payroll uses only completed verified attendance, prevents overlap and reta
       apply(
         s,
         "payroll",
-        { userId: "USR-3", from: "2026-10-04", to: "2026-10-05" },
+        { userId: "USR-3", from: "2026-10-04", to: "2026-10-04" },
         admin,
       ),
     /overlaps/,
@@ -457,14 +488,34 @@ test("completed unpaid work is immutable while final payment remains allowed", (
     .forEach((t) => (t.progress = 100));
   apply(s, "complete", { id: p.id, requirements: true }, admin);
   assert.throws(
-    () => apply(s, "task", { projectId: p.id }, foreman),
+    () =>
+      apply(
+        s,
+        "task",
+        { ...s.tasks.find((t) => t.projectId === p.id), projectId: p.id },
+        foreman,
+      ),
     /preserved/,
   );
   assert.throws(
-    () => apply(s, "usage", { projectId: p.id }, foreman),
+    () =>
+      apply(
+        s,
+        "usage",
+        {
+          id: s.usage.find((u) => u.projectId === p.id).id,
+          projectId: p.id,
+          delivered: 1,
+          used: 0,
+        },
+        foreman,
+      ),
     /preserved/,
   );
-  assert.throws(() => apply(s, "project", { id: p.id }, admin), /preserved/);
+  assert.throws(
+    () => apply(s, "project", { id: p.id, status: "On Hold" }, admin),
+    /preserved/,
+  );
 });
 
 test("sample quotation totals and quantities are financially consistent", () => {

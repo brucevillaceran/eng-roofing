@@ -7,6 +7,21 @@ import { apply } from "./domain.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+const editableUser = (u) =>
+  Object.fromEntries(
+    [
+      "id",
+      "name",
+      "role",
+      "email",
+      "contact",
+      "active",
+      "photo",
+      ...(u.role === "Employee" ? ["rate"] : []),
+    ]
+      .filter((k) => u[k] !== undefined)
+      .map((k) => [k, u[k]]),
+  );
 const password = "Synthetic-test-password-2026";
 async function setup(t, path = ":memory:") {
   const store = await createStore(path);
@@ -15,7 +30,7 @@ async function setup(t, path = ":memory:") {
     id: "admin",
     name: "Test Admin",
     email: "admin@example.test",
-    contact: "000",
+    contact: "09123456789",
     role: "Admin",
     active: true,
     sessionVersion: 0,
@@ -95,13 +110,15 @@ async function accounts(env) {
     ["client2", "Client"],
   ]) {
     await env.action(env.admin, "user", {
-      name,
+      name: name.replace("2", " Two"),
       role,
       email: `${name}@example.test`,
-      contact: "000",
+      contact: "09123456789",
       password,
       active: "Active",
-      rate: 800,
+      ...(role === "Employee"
+        ? { rate: 800, descriptor: Array(128).fill(0.1) }
+        : {}),
     });
   }
   const identities = {};
@@ -117,7 +134,7 @@ async function accounts(env) {
   return identities;
 }
 const booking = {
-  phone: "000",
+  phone: "09123456789",
   address: "Synthetic site",
   date: "2099-10-10",
   time: "09:00",
@@ -141,7 +158,7 @@ async function project(env, users) {
   );
   await env.action(users.foreman, "inspection", {
     id: i.id,
-    date: booking.date,
+    date: new Date().toISOString().slice(0, 10),
     area: 100,
     linear: 30,
     sections: 2,
@@ -158,7 +175,7 @@ async function project(env, users) {
     price: 500,
     thickness: "0.4 mm",
     profile: "Rib-Type / Ribbed",
-    active: "Active",
+    active: true,
   });
   const material = (await env.store.read()).materials[0];
   await env.action(users.foreman, "estimate", {
@@ -232,15 +249,25 @@ test("empty database, hashed credentials, registration, sessions, CSRF and logou
     ).status,
     401,
   );
+  const injected = await env.request("/api/auth/register", {
+    method: "POST",
+    data: {
+      name: "Registered Client",
+      contact: "09123456789",
+      email: "injected@example.test",
+      password,
+      role: "Admin",
+      active: false,
+    },
+  });
+  assert.equal(injected.status, 400);
   const registered = await env.request("/api/auth/register", {
     method: "POST",
     data: {
       name: "Registered Client",
-      contact: "000",
+      contact: "09123456789",
       email: "NEW@EXAMPLE.TEST",
       password,
-      role: "Admin",
-      active: false,
     },
   });
   assert.equal(registered.status, 201);
@@ -277,13 +304,18 @@ test("empty database, hashed credentials, registration, sessions, CSRF and logou
     (
       await env.request("/api/auth/register", {
         method: "POST",
-        data: { name: "Duplicate", email: "new@example.test", password },
+        data: {
+          name: "Duplicate",
+          email: "new@example.test",
+          contact: "09123456789",
+          password,
+        },
       })
     ).status,
     400,
   );
   await env.action(identity, "book", booking);
-  await env.request("/api/auth/logout", { method: "POST", identity });
+  await env.request("/api/auth/logout", { method: "POST", identity, data: {} });
   assert.equal((await env.request("/api/state", { identity })).status, 401);
   assert.equal(
     (await env.request("/api/state", { identity: env.admin })).status,
@@ -384,8 +416,18 @@ test("multi-user end-to-end workflow, isolation, notifications, attendance and p
     userId: users.employee.user.id,
     descriptor,
   });
+  await env.action(
+    users.employee,
+    "attendance",
+    {
+      userId: users.employee2.user.id,
+      descriptor,
+      latitude: 14.6,
+      longitude: 121,
+    },
+    400,
+  );
   await env.action(users.employee, "attendance", {
-    userId: users.employee2.user.id,
     descriptor,
     latitude: 14.6,
     longitude: 121,
@@ -408,7 +450,7 @@ test("multi-user end-to-end workflow, isolation, notifications, attendance and p
   await env.action(env.admin, "payroll", {
     userId: users.employee.user.id,
     from: "2020-01-01",
-    to: "2099-12-31",
+    to: new Date().toISOString().slice(0, 10),
     deductions: 20,
   });
   const payroll = (await env.store.read()).payroll[0];
@@ -497,12 +539,21 @@ test("multi-user end-to-end workflow, isolation, notifications, attendance and p
   await env.action(users.client, "read", {});
   assert.ok((await own(users.client)).notifications.every((n) => n.read));
   assert.ok((await own(env.admin)).notifications.some((n) => !n.read));
+  await env.action(
+    users.employee,
+    "profile",
+    {
+      userId: users.employee2.user.id,
+      name: "Updated employee",
+      contact: "09987654321",
+      role: "Admin",
+      rate: 99999,
+    },
+    400,
+  );
   await env.action(users.employee, "profile", {
-    userId: users.employee2.user.id,
     name: "Updated employee",
-    contact: "111",
-    role: "Admin",
-    rate: 99999,
+    contact: "09987654321",
   });
   assert.equal(
     (await env.store.read()).users.find((u) => u.id === users.employee.user.id)
@@ -512,7 +563,7 @@ test("multi-user end-to-end workflow, isolation, notifications, attendance and p
   assert.equal(
     (await env.store.read()).users.find((u) => u.id === users.employee2.user.id)
       .name,
-    "employee2",
+    "employee Two",
   );
 });
 
@@ -522,7 +573,10 @@ test("account activation, unique emails, role changes, last admin and session re
   const employee = (await env.store.read()).users.find(
     (u) => u.id === users.employee.user.id,
   );
-  await env.action(env.admin, "user", { ...employee, active: "Inactive" });
+  await env.action(env.admin, "user", {
+    ...editableUser(employee),
+    active: "Inactive",
+  });
   assert.equal(
     (await env.request("/api/state", { identity: users.employee })).status,
     401,
@@ -537,7 +591,7 @@ test("account activation, unique emails, role changes, last admin and session re
     401,
   );
   await env.action(env.admin, "user", {
-    ...employee,
+    ...editableUser(employee),
     active: "Active",
     password: "Replacement-password-2026",
   });
@@ -550,24 +604,35 @@ test("account activation, unique emails, role changes, last admin and session re
     ).status,
     401,
   );
-  await env.action(env.admin, "user", { ...employee, role: "Secretary" }, 400);
   await env.action(
     env.admin,
     "user",
-    { ...employee, role: "Site Engineer" },
+    { ...editableUser(employee), role: "Secretary" },
     400,
   );
   await env.action(
     env.admin,
     "user",
-    { ...employee, email: env.admin.user.email },
+    { ...editableUser(employee), role: "Site Engineer" },
+    400,
+  );
+  await env.action(
+    env.admin,
+    "user",
+    { ...editableUser(employee), email: env.admin.user.email },
     400,
   );
   const admin = (await env.store.read()).users[0];
-  await env.action(env.admin, "user", { ...admin, active: "Inactive" }, 400);
+  await env.action(
+    env.admin,
+    "user",
+    { ...editableUser(admin), active: "Inactive" },
+    400,
+  );
   await env.action(env.admin, "user", {
-    ...employee,
+    ...editableUser(employee),
     role: "Foreman",
+    rate: undefined,
     active: "Active",
   });
   assert.equal(
@@ -747,10 +812,14 @@ test("legacy booking linking and administrative corrections preserve history", a
     env.admin,
     "user",
     {
-      ...(await env.store.read()).users.find(
-        (u) => u.id === users.foreman.user.id,
+      ...editableUser(
+        (await env.store.read()).users.find(
+          (u) => u.id === users.foreman.user.id,
+        ),
       ),
       role: "Employee",
+      rate: 800,
+      descriptor: Array(128).fill(0.1),
     },
     400,
   );
@@ -764,7 +833,7 @@ test("profile password changes verify old credentials and revoke existing sessio
     "profile",
     {
       name: "Client",
-      contact: "000",
+      contact: "09123456789",
       currentPassword: "wrong",
       password: "New-client-password-2026",
     },
@@ -772,7 +841,7 @@ test("profile password changes verify old credentials and revoke existing sessio
   );
   await env.action(users.client, "profile", {
     name: "Client",
-    contact: "000",
+    contact: "09123456789",
     currentPassword: password,
     password: "New-client-password-2026",
   });

@@ -384,3 +384,17 @@ CREATE TABLE IF NOT EXISTS `app_state` (
   revision BIGINT NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 INSERT INTO app_state (id, revision) VALUES (1, 0) ON DUPLICATE KEY UPDATE id=id;
+
+-- Retired account-level payroll fields, never exposed in API state.
+-- Attendance, payslips, and their financial snapshots remain in their original tables.
+CREATE TABLE IF NOT EXISTS `userPayrollArchive` (
+  id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin PRIMARY KEY,
+  _position INT NOT NULL,
+  userId VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  role ENUM('Admin','Foreman','Employee','Client') NOT NULL,
+  rate DOUBLE NULL,
+  descriptor JSON NULL,
+  archivedAt DATETIME(3) NOT NULL,
+  _fields JSON NOT NULL,
+  FOREIGN KEY (userId) REFERENCES users(id) ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

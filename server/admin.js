@@ -1,3 +1,4 @@
+import { personName } from "../shared/validation.js";
 // Explicit local operator command: creates or recovers an administrator.
 import { createStore } from "./store.js";
 import { hashPassword, validEmail } from "./auth.js";
@@ -25,14 +26,13 @@ try {
         id: `USR-${randomUUID()}`,
         role: "Admin",
         email,
-        rate: 0,
         contact: "",
         photo: "",
       };
       s.users.push(u);
     }
     Object.assign(u, {
-      name,
+      name: personName(name),
       passwordHash,
       active: true,
       sessionVersion: (u.sessionVersion || 0) + 1,

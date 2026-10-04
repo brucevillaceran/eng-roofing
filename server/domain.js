@@ -1,3 +1,13 @@
+import {
+  validateAction,
+  actionRoles,
+  numberValue,
+  dateValue,
+  textValue,
+  personName,
+  limits,
+} from "../shared/validation.js";
+import { archiveNonEmployeePayroll } from "./payroll-fields.js";
 import { randomUUID } from "node:crypto";
 import { hashPassword, verifyPassword, validEmail, roles } from "./auth.js";
 export const services = [
@@ -19,28 +29,10 @@ const fail = (message) => {
 const need = (condition, message) => {
   if (!condition) fail(message);
 };
-const num = (v, label, min = 0) => {
-  const n = Number(v);
-  need(Number.isFinite(n) && n >= min, `${label} must be at least ${min}.`);
-  return n;
-};
+const num = (value, label, min = 0) => numberValue(value, label, { min });
 const money = (n) => Math.round(n * 100) / 100;
-const date = (v, label) => {
-  need(
-    /^\d{4}-\d{2}-\d{2}$/.test(v || "") &&
-      !isNaN(Date.parse(v)) &&
-      new Date(v).toISOString().slice(0, 10) === v,
-    `${label} is required.`,
-  );
-  return v;
-};
-const text = (v, label) => {
-  need(
-    typeof v === "string" && v.trim().length > 0 && v.length <= 10000,
-    `${label} is required.`,
-  );
-  return v.trim();
-};
+const date = (value, label) => dateValue(value, label);
+const text = (value, label) => textValue(value, label);
 export const balance = (s, p) =>
   money(
     s.quotations.find((q) => q.id === p.quotationId).total -
@@ -69,6 +61,7 @@ export function apply(s, action, d, actor = {}) {
       roles.includes(actor.role),
       "This action is unavailable for your role.",
     );
+  if (actionRoles[action]) permit(...actionRoles[action]);
   const get = (table, key) =>
     s[table].find((x) => x.id === key) || fail(`${table} record not found.`);
   const project = (key, allowCompleted = false) => {
@@ -138,6 +131,23 @@ export function apply(s, action, d, actor = {}) {
     deny(b.clientId === actor.id, "This booking belongs to another client.");
     return b;
   };
+  // Check private ownership before reporting field errors for another user's record.
+  if (actor.role === "Foreman") {
+    if (["inspection", "estimate"].includes(action)) {
+      const inspection = get(
+        "inspections",
+        action === "inspection" ? d.id : d.inspectionId,
+      );
+      deny(
+        inspection.foremanId === actor.id,
+        "Inspection is assigned to another foreman.",
+      );
+    }
+    if (["task", "usage", "progress", "complete"].includes(action))
+      project(action === "complete" ? d.id : d.projectId);
+  }
+  if (["quoteDecision", "feedback"].includes(action)) clientBooking();
+  d = validateAction(action, d, { state: s, user: actor });
   let result;
   switch (action) {
     case "book": {
@@ -148,8 +158,8 @@ export function apply(s, action, d, actor = {}) {
         owner.role === "Client" && owner.active !== false,
         "Choose an active client account.",
       );
-      const name = owner.name,
-        emailAddress = owner.email;
+      const name = personName(owner.name, "Client name"),
+        emailAddress = validEmail(owner.email);
       need(
         /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailAddress),
         "Enter a valid email address.",
@@ -350,6 +360,10 @@ export function apply(s, action, d, actor = {}) {
         total = money(
           items.reduce((a, x) => a + x.quantity * x.price, 0) + charges,
         );
+      need(
+        total <= limits.amount,
+        "Quotation total cannot exceed ₱1,000,000,000.",
+      );
       const q = {
         id: id("QT"),
         bookingId: i.bookingId,
@@ -400,7 +414,13 @@ export function apply(s, action, d, actor = {}) {
       q.total = money(
         q.items.reduce((a, x) => a + x.quantity * x.price, 0) + q.charges,
       );
-      q.downpayment = money(num(d.downpayment ?? q.total * 0.3, "Downpayment"));
+      need(
+        q.total <= limits.amount,
+        "Quotation total cannot exceed ₱1,000,000,000.",
+      );
+      q.downpayment = money(
+        num(d.downpayment ?? money(q.total * 0.3), "Downpayment"),
+      );
       need(q.downpayment <= q.total, "Downpayment cannot exceed total.");
       q.notes = d.notes ?? q.notes;
       q.status = "Awaiting Client";
@@ -555,7 +575,8 @@ export function apply(s, action, d, actor = {}) {
       const p = project(d.projectId);
       const assigneeId = text(d.assigneeId, "Assigned personnel");
       need(
-        [p.foremanId, ...p.employeeIds].includes(assigneeId),
+        [p.foremanId, ...p.employeeIds].includes(assigneeId) &&
+          get("users", assigneeId).active !== false,
         "Assign the task to project personnel.",
       );
       const t = d.id ? get("tasks", d.id) : { id: id("TSK"), projectId: p.id };
@@ -565,6 +586,10 @@ export function apply(s, action, d, actor = {}) {
       const start = date(d.start, "Task start"),
         due = date(d.due, "Task due date");
       need(due >= start, "Task due date must follow start.");
+      need(
+        (!p.start || start >= p.start) && (!p.end || due <= p.end),
+        "Task dates must be within the project schedule.",
+      );
       Object.assign(t, {
         name: text(d.name, "Task name"),
         assigneeId,
@@ -768,7 +793,9 @@ export function apply(s, action, d, actor = {}) {
         email: emailAddress,
         contact: text(d.contact, "Contact"),
         photo: d.photo || u.photo || "",
-        rate: num(d.rate || 0, "Daily rate"),
+        ...(d.role === "Employee"
+          ? { rate: d.rate, descriptor: d.descriptor || u.descriptor }
+          : {}),
         active,
         initials: d.name
           .split(" ")
@@ -776,6 +803,7 @@ export function apply(s, action, d, actor = {}) {
           .slice(0, 2)
           .join(""),
       });
+      archiveNonEmployeePayroll(s, u);
       if (!d.id) s.users.push(u);
       break;
     }
@@ -872,6 +900,10 @@ export function apply(s, action, d, actor = {}) {
     case "notification": {
       permit("Admin");
       const recipient = get("users", d.userId);
+      need(
+        recipient.active !== false,
+        "Choose an active notification recipient.",
+      );
       notify(
         recipient.role,
         text(d.title, "Title"),
@@ -883,7 +915,7 @@ export function apply(s, action, d, actor = {}) {
     case "enroll": {
       permit("Admin");
       const u = get("users", d.userId);
-      need(["Foreman", "Employee"].includes(u.role), "Choose field personnel.");
+      need(u.role === "Employee", "Only Employees can enroll for attendance.");
       need(
         Array.isArray(d.descriptor) &&
           d.descriptor.length === 128 &&
@@ -894,7 +926,7 @@ export function apply(s, action, d, actor = {}) {
       break;
     }
     case "attendance": {
-      permit("Employee", "Foreman");
+      permit("Employee");
       const u = get("users", actor.id);
       need(u.descriptor, "Ask Admin to enroll your face before attendance.");
       need(
@@ -920,6 +952,10 @@ export function apply(s, action, d, actor = {}) {
         );
       if (previous) {
         need(!previous.checkOut, "Attendance is already complete for today.");
+        need(
+          Date.now() >= Date.parse(previous.checkIn),
+          "Check-out must follow check-in.",
+        );
         previous.checkOut = now();
         previous.checkOutLatitude = d.latitude;
         previous.checkOutLongitude = d.longitude;
@@ -971,10 +1007,8 @@ export function apply(s, action, d, actor = {}) {
     case "payroll": {
       permit("Admin");
       const u = get("users", d.userId);
-      need(
-        ["Foreman", "Employee"].includes(u.role),
-        "Choose an employee or foreman.",
-      );
+      need(u.role === "Employee", "Choose an Employee.");
+      numberValue(u.rate, "Daily rate", { min: 0.01, max: limits.rate });
       const from = date(d.from, "Period start"),
         to = date(d.to, "Period end");
       need(to >= from, "Invalid payroll period.");

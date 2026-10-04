@@ -430,6 +430,7 @@ export function seed() {
   ];
   return {
     users,
+    userPayrollArchive: [],
     bookings,
     inspections,
     quotations,
