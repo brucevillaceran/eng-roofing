@@ -70,7 +70,7 @@ import {
   PolarRadiusAxis,
 } from "recharts";
 import QRCode from "qrcode";
-import { profiles, accessories } from "../server/seed.js";
+import { profiles, accessories } from "../shared/roofing.js";
 import "./style.css";
 const Ctx = createContext();
 const useApp = () => useContext(Ctx);
@@ -134,6 +134,7 @@ const allowed = {
     "Tasks",
     "Project Progress",
     "Material Usage",
+    "Payroll",
     "Attendance",
     "Notifications",
     "Profile",
@@ -150,6 +151,7 @@ const allowed = {
   Client: [
     "Dashboard",
     "Bookings",
+    "Site Inspections",
     "Projects",
     "Quotations",
     "Payments",
@@ -359,10 +361,108 @@ function Modal({ title, subtitle, children, onClose, wide = false }) {
     </div>
   );
 }
+function Authentication({ onDone }) {
+  const [register, setRegister] = useState(location.pathname === "/register");
+  return (
+    <div className="auth-page">
+      <section className="card auth-card">
+        <a href="/home" className="auth-brand">
+          <img src="/favicon.svg" width="48" alt="ENG Roofing" />
+          <h1>ENG Roofing</h1>
+        </a>
+        <h2>{register ? "Create your client account" : "Sign in"}</h2>
+        <p>
+          {register
+            ? "Track bookings, quotations, projects, and payments in your own portal."
+            : "Use your assigned account to open your portal."}
+        </p>
+        <Form
+          submit={register ? "Register" : "Sign in"}
+          onSubmit={async (d) => {
+            const res = await fetch(
+              `/api/auth/${register ? "register" : "login"}`,
+              {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(d),
+              },
+            );
+            const result = await res.json();
+            if (!res.ok) throw new Error(result.error);
+            await onDone();
+            const target = location.pathname;
+            location.href =
+              target.startsWith("/track/") ||
+              target.startsWith("/verify/") ||
+              target === "/book"
+                ? target
+                : `/${result.user.role.toLowerCase()}/dashboard`;
+          }}
+        >
+          {register && (
+            <Field
+              label="Full name"
+              name="name"
+              maxLength="150"
+              autoComplete="name"
+              required
+            />
+          )}
+          <Field
+            label="Email"
+            name="email"
+            type="email"
+            autoComplete="username"
+            required
+          />
+          {register && (
+            <Field
+              label="Contact number"
+              name="contact"
+              autoComplete="tel"
+              required
+            />
+          )}
+          <Field
+            label="Password"
+            name="password"
+            type="password"
+            minLength={register ? 12 : undefined}
+            maxLength="128"
+            autoComplete={register ? "new-password" : "current-password"}
+            required
+          />
+        </Form>
+        <button className="text-button" onClick={() => setRegister(!register)}>
+          {register
+            ? "Already registered? Sign in"
+            : "New client? Create an account"}
+        </button>
+        <p className="muted">Staff accounts are created by Admin.</p>
+      </section>
+    </div>
+  );
+}
+
 function App() {
   const [state, setState] = useState(null),
-    [userId, setUserId] = useState(localStorage.getItem("eng-user") || "USR-1"),
-    [page, setPage] = useState("Dashboard"),
+    [session, setSession] = useState(null),
+    [page, setPage] = useState(
+      () =>
+        [
+          ...nav.map((n) => n[0]),
+          "Settings",
+          "Profile",
+          "Tasks",
+          "Project Progress",
+          "Material Usage",
+          "Feedback",
+        ].find(
+          (n) =>
+            n.toLowerCase().replaceAll(" ", "-") ===
+            window.location.pathname.split("/")[2],
+        ) || "Dashboard",
+    ),
     [modal, setModal] = useState(null),
     [toast, setToast] = useState(""),
     [mobile, setMobile] = useState(false),
@@ -370,15 +470,61 @@ function App() {
     [search, setSearch] = useState("");
   const path = window.location.pathname;
   const load = async () => {
-    const r = await fetch("/api/state", {
-      headers:
-        window.location.pathname === "/" ? { "x-demo-user": userId } : {},
-    });
+    const auth = await fetch("/api/auth/me");
+    if (!auth.ok) throw new Error("Could not load your session.");
+    const identity = await auth.json();
+    setSession(identity.user ? identity : null);
+    if (!identity.user) {
+      setState({
+        users: [],
+        bookings: [],
+        inspections: [],
+        quotations: [],
+        projects: [],
+        tasks: [],
+        materials: [],
+        usage: [],
+        attendance: [],
+        payroll: [],
+        payments: [],
+        feedback: [],
+        notifications: [],
+        emails: [],
+        settings: [],
+      });
+      return;
+    }
+    const r = await fetch("/api/state");
     if (!r.ok) throw new Error("Could not load the workspace.");
     setState(await r.json());
   };
   useEffect(() => {
     load().catch((e) => setError(e.message));
+    const refresh = setInterval(
+      () => load().catch((e) => setError(e.message)),
+      30000,
+    );
+    const navigate = () =>
+      setPage(
+        [
+          ...nav.map((n) => n[0]),
+          "Settings",
+          "Profile",
+          "Tasks",
+          "Project Progress",
+          "Material Usage",
+          "Feedback",
+        ].find(
+          (n) =>
+            n.toLowerCase().replaceAll(" ", "-") ===
+            location.pathname.split("/")[2],
+        ) || "Dashboard",
+      );
+    window.addEventListener("popstate", navigate);
+    return () => {
+      clearInterval(refresh);
+      window.removeEventListener("popstate", navigate);
+    };
   }, []);
   useEffect(() => {
     if (toast) {
@@ -389,11 +535,17 @@ function App() {
   const act = async (action, data, keep = false) => {
     const r = await fetch("/api/action", {
       method: "POST",
-      headers: { "Content-Type": "application/json", "x-demo-user": userId },
+      headers: {
+        "Content-Type": "application/json",
+        "x-csrf-token": session?.csrf || "",
+      },
       body: JSON.stringify({ action, data }),
     });
     const result = await r.json();
-    if (!r.ok) throw new Error(result.error);
+    if (!r.ok) {
+      if (r.status === 401) await load();
+      throw new Error(result.error);
+    }
     await load();
     if (!keep) setModal(null);
     setToast("Changes saved successfully");
@@ -408,8 +560,38 @@ function App() {
         {error && <Button onClick={() => location.reload()}>Try again</Button>}
       </div>
     );
-  const user = state.users.find((u) => u.id === userId) || state.users[0];
+  const user = session?.user;
+  if (!user && path !== "/home") return <Authentication onDone={load} />;
+  if (
+    user &&
+    (path === "/login" ||
+      path === "/register" ||
+      path === "/" ||
+      (path === "/book" && !["Admin", "Client"].includes(user.role)) ||
+      (path.split("/")[2] &&
+        !["track", "verify"].includes(path.split("/")[1]) &&
+        path.split("/")[1] !== user.role.toLowerCase()))
+  ) {
+    location.replace(`/${user.role.toLowerCase()}/dashboard`);
+    return null;
+  }
+  const currentPage =
+    user &&
+    (allowed[user.role].includes(page) ||
+      (user.role === "Admin" && ["Settings", "Profile"].includes(page)))
+      ? page
+      : "Dashboard";
   const go = (p) => {
+    if (!(
+      allowed[user.role].includes(p) ||
+      (user.role === "Admin" && ["Settings", "Profile"].includes(p))
+    ))
+      return;
+    history.pushState(
+      {},
+      "",
+      `/${user.role.toLowerCase()}/${p.toLowerCase().replaceAll(" ", "-")}`,
+    );
     setPage(p);
     setSearch("");
     setMobile(false);
@@ -509,7 +691,10 @@ function App() {
                       }
                     </b>
                   )}
-                {name === "Notifications" && <i className="notification-dot" />}
+                {name === "Notifications" &&
+                  state.notifications.some((n) => !n.read) && (
+                    <i className="notification-dot" />
+                  )}
               </button>
             ))}
           </nav>
@@ -538,7 +723,7 @@ function App() {
               </span>
             </button>
             <div className="sidebar-foot">
-              <span className="live-dot" /> All systems operational{" "}
+              <span className="live-dot" /> Secure account portal{" "}
               <span>v1.0</span>
             </div>
           </div>
@@ -558,43 +743,51 @@ function App() {
               <b>{page}</b>
             </div>
             <div className="top-actions">
-              <span className="demo-label">PROTOTYPE</span>
+              <span className="portal-label">{user.role}</span>
               <button
                 className="icon-btn top-bell"
                 aria-label="View notifications"
                 onClick={() => go("Notifications")}
               >
                 <Bell size={19} />
-                <i />
+                {state.notifications.some((n) => !n.read) && <i />}
               </button>
               <div className="top-divider" />
               <Avatar name={user.name} photo={user.photo} />
               <label className="user-select">
                 <strong>{user.name}</strong>
-                <select
-                  aria-label="Switch demo role"
-                  value={userId}
-                  onChange={(e) => {
-                    setUserId(e.target.value);
-                    localStorage.setItem("eng-user", e.target.value);
-                    setPage("Dashboard");
-                  }}
-                >
-                  {state.users.map((u) => (
-                    <option value={u.id} key={u.id}>
-                      {u.role} · {u.name}
-                    </option>
-                  ))}
-                </select>
+                <small>{user.role} account</small>
               </label>
-              <ChevronDown size={14} />
+              <Button
+                variant="small secondary"
+                onClick={async () => {
+                  const response = await fetch("/api/auth/logout", {
+                    method: "POST",
+                    headers: { "x-csrf-token": session.csrf },
+                  });
+                  if (response.ok) {
+                    setSession(null);
+                    setState(null);
+                    location.href = "/login";
+                  } else setToast("Could not sign out. Please try again.");
+                }}
+              >
+                Sign out
+              </Button>
             </div>
           </header>
           <main>
-            {page === "Dashboard" ? <Dashboard /> : <ModulePage page={page} />}
+            {currentPage === "Dashboard" ? (
+              <Dashboard />
+            ) : (
+              <ModulePage page={currentPage} />
+            )}
           </main>
           <footer className="app-footer">
-            <span>© 2026 ENG Roofing Supply & Installation Services</span>
+            <span>
+              © {new Date().getFullYear()} ENG Roofing Supply & Installation
+              Services
+            </span>
             <span>Integrated projects. Connected people.</span>
           </footer>
         </div>
@@ -641,7 +834,7 @@ const userProjects = (s, user) =>
       (user.role === "Foreman" && p.foremanId === user.id) ||
       (user.role === "Employee" && p.employeeIds.includes(user.id)) ||
       (user.role === "Client" &&
-        s.bookings.find((b) => b.id === p.bookingId)?.email === user.email),
+        s.bookings.find((b) => b.id === p.bookingId)?.clientId === user.id),
   );
 function Dashboard() {
   const { s, user, go, setModal } = useApp();
@@ -719,7 +912,9 @@ function Dashboard() {
             user.role === "Client"
               ? money(outstanding)
               : s.tasks.filter(
-                  (t) => t.assigneeId === user.id && t.progress < 100,
+                  (t) =>
+                    (user.role === "Foreman" || t.assigneeId === user.id) &&
+                    t.progress < 100,
                 ).length,
             user.role === "Client" ? CreditCard : ClipboardCheck,
             user.role === "Client"
@@ -743,10 +938,12 @@ function Dashboard() {
             year: "numeric",
           })}
         </div>
-        <Button onClick={() => setModal({ type: "bookingNew" })}>
-          <Plus size={17} />
-          New Booking
-        </Button>
+        {["Admin", "Client"].includes(user.role) && (
+          <Button onClick={() => setModal({ type: "bookingNew" })}>
+            <Plus size={17} />
+            New Booking
+          </Button>
+        )}
       </PageHeading>
       <div className="welcome-banner">
         <div className="banner-grid" />
@@ -842,65 +1039,67 @@ function Dashboard() {
             successfully completed
           </div>
         </section>
-        <section className="card payment-chart">
-          <CardHead
-            title="Payment summary"
-            subtitle="Project value and payments received"
-          >
-            <span className="legend-inline">
-              <i />
-              Value <i />
-              Received
-            </span>
-          </CardHead>
-          <div className="bar-chart">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart
-                data={projects.slice(0, 6).map((p) => ({
-                  name: p.name.split(" ")[0],
-                  Value: paymentStatus(s, p).total,
-                  Received: paymentStatus(s, p).paid,
-                }))}
-                barGap={5}
-                margin={{ top: 10, right: 10, left: -18, bottom: 0 }}
-              >
-                <CartesianGrid
-                  strokeDasharray="3 4"
-                  vertical={false}
-                  stroke="#edf0ed"
-                />
-                <XAxis
-                  dataKey="name"
-                  axisLine={false}
-                  tickLine={false}
-                  tick={{ fill: "#88918c", fontSize: 10 }}
-                />
-                <YAxis
-                  tickFormatter={(v) => `${v / 1000}k`}
-                  axisLine={false}
-                  tickLine={false}
-                  tick={{ fill: "#88918c", fontSize: 10 }}
-                />
-                <Tooltip
-                  formatter={money}
-                  contentStyle={{ borderRadius: 10, fontSize: 12 }}
-                />
-                <Bar
-                  dataKey="Value"
-                  fill="#d5e6d3"
-                  radius={[3, 3, 0, 0]}
-                  maxBarSize={19}
-                />
-                <Bar
-                  dataKey="Received"
-                  fill="#286b4e"
-                  radius={[3, 3, 0, 0]}
-                  maxBarSize={19}
-                />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </section>
+        {["Admin", "Client"].includes(user.role) && (
+          <section className="card payment-chart">
+            <CardHead
+              title="Payment summary"
+              subtitle="Project value and payments received"
+            >
+              <span className="legend-inline">
+                <i />
+                Value <i />
+                Received
+              </span>
+            </CardHead>
+            <div className="bar-chart">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart
+                  data={projects.slice(0, 6).map((p) => ({
+                    name: p.name.split(" ")[0],
+                    Value: paymentStatus(s, p).total,
+                    Received: paymentStatus(s, p).paid,
+                  }))}
+                  barGap={5}
+                  margin={{ top: 10, right: 10, left: -18, bottom: 0 }}
+                >
+                  <CartesianGrid
+                    strokeDasharray="3 4"
+                    vertical={false}
+                    stroke="#e5e7eb"
+                  />
+                  <XAxis
+                    dataKey="name"
+                    axisLine={false}
+                    tickLine={false}
+                    tick={{ fill: "#6b7280", fontSize: 10 }}
+                  />
+                  <YAxis
+                    tickFormatter={(v) => `${v / 1000}k`}
+                    axisLine={false}
+                    tickLine={false}
+                    tick={{ fill: "#6b7280", fontSize: 10 }}
+                  />
+                  <Tooltip
+                    formatter={money}
+                    contentStyle={{ borderRadius: 10, fontSize: 12 }}
+                  />
+                  <Bar
+                    dataKey="Value"
+                    fill="#fecaca"
+                    radius={[3, 3, 0, 0]}
+                    maxBarSize={19}
+                  />
+                  <Bar
+                    dataKey="Received"
+                    fill="#b91c1c"
+                    radius={[3, 3, 0, 0]}
+                    maxBarSize={19}
+                  />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </section>
+        )}
       </div>
       <div className="dashboard-bottom">
         <section className="card active-projects">
@@ -927,7 +1126,7 @@ function Dashboard() {
           </CardHead>
           <div className="activity-list">
             {s.notifications
-              .filter((n) => n.role === user.role)
+              .filter((n) => n.userId === user.id)
               .slice(0, 4)
               .map((n, i) => (
                 <div className="activity-item" key={n.id}>
@@ -947,7 +1146,7 @@ function Dashboard() {
                   </div>
                 </div>
               ))}
-            {!s.notifications.some((n) => n.role === user.role) && (
+            {!s.notifications.some((n) => n.userId === user.id) && (
               <p className="muted">You’re all caught up.</p>
             )}
           </div>
@@ -960,61 +1159,81 @@ function Dashboard() {
         </section>
       </div>
       <div className="dashboard-extra">
-        <section className="card">
-          <CardHead
-            title="Client satisfaction"
-            subtitle="Ratings from completed roofing projects"
-          >
-            <button
-              className="text-button"
-              onClick={() =>
-                go(user.role === "Admin" ? "Feedback Analysis" : "Projects")
-              }
+        {["Admin", "Client"].includes(user.role) && (
+          <section className="card">
+            <CardHead
+              title="Client satisfaction"
+              subtitle="Ratings from completed roofing projects"
             >
-              View insights <ArrowUpRight size={14} />
-            </button>
-          </CardHead>
-          <div className="satisfaction-mini">
-            <span className="rating-number">
-              {average(s.feedback).toFixed(1)}
-              <small>/ 5</small>
-            </span>
-            <div>
-              <div className="stars">★★★★★</div>
-              <span className="muted">
-                Based on {s.feedback.length} client reviews
+              <button
+                className="text-button"
+                onClick={() =>
+                  go(user.role === "Admin" ? "Feedback Analysis" : "Projects")
+                }
+              >
+                View insights <ArrowUpRight size={14} />
+              </button>
+            </CardHead>
+            <div className="satisfaction-mini">
+              <span className="rating-number">
+                {average(s.feedback).toFixed(1)}
+                <small>/ 5</small>
               </span>
+              <div>
+                <div className="stars">
+                  {Array.from({ length: 5 }, (_, i) =>
+                    i < Math.round(average(s.feedback)) ? "★" : "☆",
+                  ).join("")}
+                </div>
+                <span className="muted">
+                  Based on {s.feedback.length} client reviews
+                </span>
+              </div>
+              <div className="mini-category">
+                <b>
+                  {s.feedback.length
+                    ? [
+                        "installation",
+                        "service",
+                        "timeliness",
+                        "professionalism",
+                      ].sort(
+                        (a, b) =>
+                          average(s.feedback, b) - average(s.feedback, a),
+                      )[0]
+                    : "No ratings yet"}
+                </b>
+                <span>Highest-rated category</span>
+              </div>
             </div>
-            <div className="mini-category">
-              <b>Professionalism</b>
-              <span>Highest-rated category</span>
-            </div>
-          </div>
-        </section>
-        <section className="card payroll-mini">
-          <CardHead
-            title="Payroll overview"
-            subtitle="Attendance connected to every payslip"
-          >
-            <Wallet size={20} />
-          </CardHead>
-          <div>
-            <strong>{money(s.payroll.reduce((a, p) => a + p.net, 0))}</strong>
-            <span>{s.payroll.length} payroll records processed</span>
-            <button
-              className="text-button"
-              onClick={() =>
-                go(
-                  allowed[user.role].includes("Payroll")
-                    ? "Payroll"
-                    : "Projects",
-                )
-              }
+          </section>
+        )}
+        {["Admin", "Foreman", "Employee"].includes(user.role) && (
+          <section className="card payroll-mini">
+            <CardHead
+              title="Payroll overview"
+              subtitle="Attendance connected to every payslip"
             >
-              View details <ArrowRight size={14} />
-            </button>
-          </div>
-        </section>
+              <Wallet size={20} />
+            </CardHead>
+            <div>
+              <strong>{money(s.payroll.reduce((a, p) => a + p.net, 0))}</strong>
+              <span>{s.payroll.length} payroll records processed</span>
+              <button
+                className="text-button"
+                onClick={() =>
+                  go(
+                    allowed[user.role].includes("Payroll")
+                      ? "Payroll"
+                      : "Projects",
+                  )
+                }
+              >
+                View details <ArrowRight size={14} />
+              </button>
+            </div>
+          </section>
+        )}
       </div>
     </>
   );
@@ -1053,39 +1272,39 @@ function donutBackground(projects) {
 function RoofIllustration() {
   return (
     <svg viewBox="0 0 550 260" fill="none" aria-hidden="true">
-      <path d="m62 207 230-92 208 70-222 67Z" fill="#244f3d" />
-      <path d="m149 144 131 47v-92L149 65Z" fill="#dbe2ce" />
-      <path d="m280 191 166-65V67L280 99Z" fill="#adc1a9" />
-      <path d="m136 65 148 51L453 58 307 11Z" fill="#9cb29a" />
-      <path d="m136 65 148 51 12-12L159 56Z" fill="#c9d6be" />
-      <path d="m284 116 169-58-2 10-170 58Z" fill="#e0e6d6" />
-      <path d="m307 11-11 93L453 58Z" fill="#77937b" />
+      <path d="m62 207 230-92 208 70-222 67Z" fill="#7f1d1d" />
+      <path d="m149 144 131 47v-92L149 65Z" fill="#e5e7eb" />
+      <path d="m280 191 166-65V67L280 99Z" fill="#d1d5db" />
+      <path d="m136 65 148 51L453 58 307 11Z" fill="#dc2626" />
+      <path d="m136 65 148 51 12-12L159 56Z" fill="#fecaca" />
+      <path d="m284 116 169-58-2 10-170 58Z" fill="#f3f4f6" />
+      <path d="m307 11-11 93L453 58Z" fill="#991b1b" />
       {Array.from({ length: 14 }, (_, i) => (
         <path
           key={i}
           d={`m${154 + i * 10.4} ${58 - i * 3.45} 141 47`}
-          stroke="#516e57"
+          stroke="#7f1d1d"
           strokeWidth="2"
         />
       ))}
-      <path d="m184 116 34 12v56l-34-12Z" fill="#244e3c" />
-      <path d="m234 129 25 9v27l-25-9Z" fill="#6b8f77" />
-      <path d="m306 134 43-17v28l-43 17Z" fill="#537e66" />
-      <path d="m367 111 48-18v29l-48 18Z" fill="#537e66" />
+      <path d="m184 116 34 12v56l-34-12Z" fill="#374151" />
+      <path d="m234 129 25 9v27l-25-9Z" fill="#6b7280" />
+      <path d="m306 134 43-17v28l-43 17Z" fill="#6b7280" />
+      <path d="m367 111 48-18v29l-48 18Z" fill="#6b7280" />
       <path
         d="m327 126 1 27m61-51v29m-83 17 43-17m18-5 48-18"
-        stroke="#c6d5bd"
+        stroke="#e5e7eb"
         strokeWidth="3"
       />
-      <path d="m133 178 47 16 7-6-46-16Z" fill="#afc3a3" />
-      <path d="m126 186 57 20 5-7-54-18Z" fill="#7f9d7b" />
+      <path d="m133 178 47 16 7-6-46-16Z" fill="#d1d5db" />
+      <path d="m126 186 57 20 5-7-54-18Z" fill="#9ca3af" />
       <path d="M102 184v-63m-14 10 14-42 15 44-15 25Z" fill="#75a077" />
       <path d="M468 158v-51m-12 9 12-33 16 34-15 21Z" fill="#78a477" />
-      <path d="m209 223 62 22 174-69" stroke="#64836a" strokeDasharray="4 6" />
-      <circle cx="472" cy="62" r="18" fill="#355b43" />
+      <path d="m209 223 62 22 174-69" stroke="#9ca3af" strokeDasharray="4 6" />
+      <circle cx="472" cy="62" r="18" fill="#7f1d1d" />
       <path
         d="m465 62 5 5 10-10"
-        stroke="#d7e8b7"
+        stroke="#fee2e2"
         strokeWidth="3"
         strokeLinecap="round"
       />
@@ -1145,7 +1364,7 @@ function ProjectTable({ projects, compact = false }) {
                 </div>
               </td>
               <td className="muted nowrap">
-                {p.end ? day(p.end).replace(", 2026", "") : "Not scheduled"}
+                {p.end ? day(p.end) : "Not scheduled"}
               </td>
               <td>
                 <button className="icon-btn" aria-label={`View ${p.name}`}>
@@ -1179,7 +1398,7 @@ const descriptions = {
   Users: "Manage the people behind every successful roofing project.",
   Bookings: "From the first request to the first site visit.",
   Projects: "Keep every roofing project moving in the right direction.",
-  Materials: "Your roofing catalog. Demonstration prices, fully editable.",
+  Materials: "Maintain materials, current prices, and catalog availability.",
   Quotations: "Turn site measurements into clear, accurate roofing estimates.",
   "Site Inspections":
     "Capture the actual requirements before preparing an estimate.",
@@ -1205,7 +1424,7 @@ function ModulePage({ page }) {
   }, [page]);
   const projects = userProjects(s, user),
     ownedIds = projects.map((p) => p.id),
-    ownedBooking = (b) => user.role !== "Client" || b.email === user.email;
+    ownedBooking = (b) => user.role !== "Client" || b.clientId === user.id;
   const matches = (obj) =>
     JSON.stringify(obj).toLowerCase().includes(search.toLowerCase());
   const add =
@@ -1275,8 +1494,8 @@ function ModulePage({ page }) {
               required
             />
             <div className="info full">
-              Prices in this workspace are demonstration values, not official
-              ENG Roofing prices. Update them in Materials.
+              Maintain your current material prices in Materials. Approved
+              quotations retain their original prices.
             </div>
             <Field
               label="Payroll policy note"
@@ -1285,10 +1504,10 @@ function ModulePage({ page }) {
               value={s.settings[0].payrollNote}
             />
             <div className="info full">
-              Local prototype · role switching is for demonstration, not secure
-              authentication. Emails are saved in the preview inbox. Face
-              verification compares descriptors but does not provide
-              anti-spoofing or liveness detection.
+              Accounts use secure sessions and role permissions. Messages are
+              saved in the email outbox; external email delivery is not
+              configured. Face verification records location but does not
+              provide liveness detection.
             </div>
           </Form>
         </section>
@@ -1502,8 +1721,8 @@ function ModulePage({ page }) {
             ) : page === "Materials" ? (
               <>
                 <div className="info inline-info">
-                  Sample/default prices for this prototype. Historical
-                  quotations keep their original unit prices.
+                  Current catalog prices. Historical quotations keep their
+                  original unit prices.
                 </div>
                 <DataTable
                   headers={[
@@ -1555,7 +1774,10 @@ function ModulePage({ page }) {
                     <Avatar name={u.name} />
                     <Name name={u.name} sub={u.id} />
                   </div>,
-                  <Badge>{u.role}</Badge>,
+                  <div>
+                    <Badge>{u.role}</Badge>
+                    <Badge>{u.active === false ? "Disabled" : "Active"}</Badge>
+                  </div>,
                   <Name name={u.email} sub={u.contact} />,
                   u.rate ? money(u.rate) : "—",
                   u.enrolled ? "Enrolled" : "Not enrolled",
@@ -1590,7 +1812,9 @@ function ModulePage({ page }) {
                 ]}
                 rows={s.inspections
                   .filter(
-                    (i) => user.role === "Admin" || i.foremanId === user.id,
+                    (i) =>
+                      ["Admin", "Client"].includes(user.role) ||
+                      i.foremanId === user.id,
                   )
                   .filter((i) =>
                     matches({
@@ -1613,9 +1837,10 @@ function ModulePage({ page }) {
                             setModal({ type: "inspection", record: i })
                           }
                         >
-                          Inspect
+                          {user.role === "Client" ? "View" : "Inspect"}
                         </Button>
-                        {i.status === "Completed" &&
+                        {user.role !== "Client" &&
+                          i.status === "Completed" &&
                           !s.quotations.some(
                             (q) => q.inspectionId === i.id,
                           ) && (
@@ -1650,8 +1875,8 @@ function ModulePage({ page }) {
                         s.inspections.find((i) => i.id === q.inspectionId)
                           ?.foremanId === user.id) ||
                       (user.role === "Client" &&
-                        s.bookings.find((b) => b.id === q.bookingId)?.email ===
-                          user.email),
+                        s.bookings.find((b) => b.id === q.bookingId)
+                          ?.clientId === user.id),
                   )
                   .filter((q) =>
                     matches({
@@ -1783,7 +2008,11 @@ function ModulePage({ page }) {
                           type: "projectDetail",
                           record: p,
                           tab:
-                            page === "Material Usage" ? "Materials" : "Tasks",
+                            page === "Material Usage"
+                              ? "Materials"
+                              : page === "Project Progress"
+                                ? "Overview"
+                                : "Tasks",
                         })
                       }
                     >
@@ -1835,7 +2064,7 @@ function DataTable({ headers, rows }) {
   );
 }
 function FeedbackAnalysis() {
-  const { s } = useApp();
+  const { s, setModal } = useApp();
   const data = ["installation", "service", "timeliness", "professionalism"].map(
       (k) => ({
         category: k[0].toUpperCase() + k.slice(1),
@@ -1852,7 +2081,11 @@ function FeedbackAnalysis() {
             {average(s.feedback).toFixed(1)}
             <small> / 5</small>
           </strong>
-          <span className="stars">★★★★★</span>
+          <span className="stars">
+            {Array.from({ length: 5 }, (_, i) =>
+              i < Math.round(average(s.feedback)) ? "★" : "☆",
+            ).join("")}
+          </span>
         </div>
         <div className="card">
           <span>Client responses</span>
@@ -1888,10 +2121,10 @@ function FeedbackAnalysis() {
                 startAngle={45}
                 endAngle={-315}
               >
-                <PolarGrid stroke="#dce6df" />
+                <PolarGrid stroke="#e5e7eb" />
                 <PolarAngleAxis
                   dataKey="category"
-                  tick={{ fontSize: 12, fill: "#617369" }}
+                  tick={{ fontSize: 12, fill: "#6b7280" }}
                 />
                 <PolarRadiusAxis
                   domain={[0, 5]}
@@ -1900,8 +2133,8 @@ function FeedbackAnalysis() {
                 />
                 <Radar
                   dataKey="rating"
-                  stroke="#327855"
-                  fill="#74a581"
+                  stroke="#b91c1c"
+                  fill="#dc2626"
                   fillOpacity={0.3}
                 />
                 <Tooltip />
@@ -1948,6 +2181,13 @@ function FeedbackAnalysis() {
               </div>
               <p>“{f.comments || "No written comment."}”</p>
               <small>{day(f.createdAt)}</small>
+              {f.reviewNotes && <p>Admin review: {f.reviewNotes}</p>}
+              <Button
+                variant="small secondary"
+                onClick={() => setModal({ type: "feedbackReview", record: f })}
+              >
+                Review feedback
+              </Button>
             </div>
           ))}
         </section>
@@ -1975,13 +2215,21 @@ function Notifications() {
             Email preview <span>{s.emails.length}</span>
           </button>
         )}
+        {user.role === "Admin" && (
+          <Button
+            variant="small secondary"
+            onClick={() => setModal({ type: "notification" })}
+          >
+            Send notification
+          </Button>
+        )}
         <Button variant="small secondary" onClick={() => act("read", {}, true)}>
           Mark all as read
         </Button>
       </div>
       {tab === "Activity" ? (
         s.notifications
-          .filter((n) => n.role === user.role)
+          .filter((n) => n.userId === user.id)
           .map((n) => (
             <div className="notification-row" key={n.id}>
               <span className="activity-icon">
@@ -2000,8 +2248,8 @@ function Notifications() {
       ) : (
         <>
           <div className="info inline-info">
-            Local email preview inbox. These messages demonstrate email content
-            and links; no external email delivery is configured.
+            Email outbox. These messages contain booking updates and links; no
+            external email delivery is configured.
           </div>
           {s.emails.length ? (
             s.emails.map((e) => (
@@ -2029,6 +2277,7 @@ function Notifications() {
   );
 }
 function Profile({ user }) {
+  const { act } = useApp();
   const [qr, setQr] = useState("");
   useEffect(() => {
     QRCode.toDataURL(`${location.origin}/verify/${user.id}`, {
@@ -2049,7 +2298,29 @@ function Profile({ user }) {
         <Phone size={16} />
         {user.contact}
       </p>
-      <p>Personnel ID: {user.id}</p>
+      <p>Account ID: {user.id}</p>
+      <Form onSubmit={(d) => act("profile", d, true)} submit="Save profile">
+        <Field label="Full name" name="name" value={user.name} required />
+        <Field
+          label="Contact number"
+          name="contact"
+          value={user.contact}
+          required
+        />
+        <Field
+          label="Current password (for password change)"
+          name="currentPassword"
+          type="password"
+          autoComplete="current-password"
+        />
+        <Field
+          label="New password (optional)"
+          name="password"
+          type="password"
+          minLength="12"
+          autoComplete="new-password"
+        />
+      </Form>
       {user.role === "Foreman" && (
         <>
           <img src={qr} width="160" alt="Scan to verify assigned foreman" />
@@ -2093,7 +2364,7 @@ function ModalContent({ modal }) {
     return (
       <Modal
         title="Book a Roofing Service"
-        subtitle="Tell us about your roof. No account required."
+        subtitle="Tell us about your roof. Your request is linked to your client account."
         onClose={close}
       >
         <BookingForm
@@ -2115,7 +2386,7 @@ function ModalContent({ modal }) {
             Track my booking <ArrowRight size={16} />
           </a>
           <p className="muted">
-            Confirmation is available in Admin → Notifications → Email preview.
+            View booking updates in your Notifications portal.
           </p>
         </div>
       </Modal>
@@ -2134,7 +2405,23 @@ function ModalContent({ modal }) {
             </p>
           </div>
           <Badge>{r.status}</Badge>
+          {r.releasedAt && <p>Released {stamp(r.releasedAt)}</p>}
         </div>
+        {!r.clientId && (
+          <Form
+            onSubmit={(d) => act("bookingOwner", { ...d, id: r.id })}
+            submit="Link legacy booking"
+          >
+            <Field
+              label="Client account"
+              name="clientId"
+              options={s.users
+                .filter((u) => u.role === "Client" && u.active !== false)
+                .map((u) => ({ value: u.id, label: `${u.name} · ${u.email}` }))}
+              required
+            />
+          </Form>
+        )}
         <Form
           onSubmit={(d) => act("booking", { ...d, id: r.id })}
           submit="Update booking"
@@ -2185,8 +2472,7 @@ function ModalContent({ modal }) {
             label="Assign inspector / foreman"
             name="foremanId"
             value={
-              s.inspections.find((i) => i.bookingId === r.id)?.foremanId ||
-              "USR-2"
+              s.inspections.find((i) => i.bookingId === r.id)?.foremanId || ""
             }
             options={s.users
               .filter((u) => u.role === "Foreman")
@@ -2214,6 +2500,20 @@ function ModalContent({ modal }) {
     title = "Site inspection";
     const b = s.bookings.find((b) => b.id === r.bookingId);
     subtitle = `${r.id} · ${b.name} · ${b.service}`;
+    if (user.role === "Client")
+      return (
+        <Modal
+          title="Site inspection"
+          subtitle={`${r.id} · ${day(r.date)}`}
+          onClose={close}
+        >
+          <Badge>{r.status}</Badge>
+          <p>Roof profile: {r.profile || "Pending inspection"}</p>
+          <p>Roof area: {r.area || 0} SQM</p>
+          <p>Condition: {r.condition || "Pending inspection"}</p>
+          <p>{r.notes || "No published inspection notes yet."}</p>
+        </Modal>
+      );
     const frozen = s.quotations.some((q) => q.inspectionId === r.id);
     content = (
       <>
@@ -2228,6 +2528,13 @@ function ModalContent({ modal }) {
           submit="Complete inspection"
           disabled={frozen}
         >
+          <Field
+            label="Results shared with the client"
+            name="clientNotes"
+            type="textarea"
+            value={r.clientNotes}
+            disabled={frozen}
+          />
           <Field
             label="Inspection date"
             name="date"
@@ -2350,8 +2657,7 @@ function ModalContent({ modal }) {
   }
   if (modal.type === "material") {
     title = r ? "Edit material" : "Add material";
-    subtitle =
-      "Default prototype prices · historical quotations remain unchanged";
+    subtitle = "Manage catalog prices · historical quotations remain unchanged";
     content = (
       <>
         <Form
@@ -2414,7 +2720,7 @@ function ModalContent({ modal }) {
               ))
             ) : (
               <p>
-                Original sample catalog price: {money(r.price)} / {r.unit}
+                Catalog price: {money(r.price)} / {r.unit}
               </p>
             )}
           </div>
@@ -2423,7 +2729,7 @@ function ModalContent({ modal }) {
     );
   }
   if (modal.type === "user") {
-    title = r ? "Edit team member" : "Add team member";
+    title = r ? "Edit account" : "Create account";
     content = (
       <Form
         onSubmit={(d) =>
@@ -2434,7 +2740,7 @@ function ModalContent({ modal }) {
         <Field
           label="Role"
           name="role"
-          options={r ? [r.role] : ["Admin", "Foreman", "Employee", "Client"]}
+          options={["Admin", "Foreman", "Employee", "Client"]}
           value={r?.role || "Employee"}
           required
         />
@@ -2457,7 +2763,25 @@ function ModalContent({ modal }) {
           type="number"
           min="0"
           step="0.01"
-          value={r?.rate || 750}
+          value={r?.rate || 0}
+        />
+        <Field
+          label={
+            r
+              ? "New password (leave blank to keep existing)"
+              : "Initial password"
+          }
+          name="password"
+          type="password"
+          minLength="12"
+          autoComplete="new-password"
+          required={!r}
+        />
+        <Field
+          label="Account status"
+          name="active"
+          options={["Active", "Inactive"]}
+          value={r?.active === false ? "Inactive" : "Active"}
         />
         <PhotoUpload photos={photos} onChange={(p) => setPhotos(p.slice(-1))} />
       </Form>
@@ -2801,7 +3125,7 @@ function ModalContent({ modal }) {
           label="Period start"
           name="from"
           type="date"
-          value="2026-10-01"
+          value={today().slice(0, 8) + "01"}
           required
         />
         <Field
@@ -2851,6 +3175,7 @@ function ModalContent({ modal }) {
             <strong>{money(r.net)}</strong>
           </div>
           <Badge>{r.status}</Badge>
+          {r.releasedAt && <p>Released {stamp(r.releasedAt)}</p>}
         </div>
         <div className="form-footer">
           <Button variant="secondary" onClick={() => window.print()}>
@@ -2858,12 +3183,115 @@ function ModalContent({ modal }) {
             Print payslip
           </Button>
           {user.role === "Admin" && r.status !== "Paid" && (
+            <Button
+              variant="secondary"
+              onClick={() => setModal({ type: "payrollUpdate", record: r })}
+            >
+              Adjust deductions
+            </Button>
+          )}
+          {user.role === "Admin" && r.status !== "Paid" && (
             <Button onClick={() => act("payrollPaid", { id: r.id })}>
               Mark paid
             </Button>
           )}
         </div>
       </>
+    );
+  }
+  if (
+    [
+      "attendanceUpdate",
+      "payrollUpdate",
+      "paymentUpdate",
+      "feedbackReview",
+      "notification",
+    ].includes(modal.type)
+  ) {
+    const config = {
+      attendanceUpdate: [
+        "Correct attendance",
+        <>
+          <Field
+            label="Verified hours"
+            name="hours"
+            type="number"
+            min="0"
+            max="8"
+            step="0.01"
+            value={r?.hours}
+            required
+          />
+          <Field
+            label="Correction reason"
+            name="reason"
+            type="textarea"
+            required
+          />
+        </>,
+      ],
+      payrollUpdate: [
+        "Adjust payroll deductions",
+        <>
+          <Field
+            label="Deductions (₱)"
+            name="deductions"
+            type="number"
+            min="0"
+            max={r?.gross}
+            step="0.01"
+            value={r?.deductions}
+            required
+          />
+          <Field
+            label="Correction reason"
+            name="reason"
+            type="textarea"
+            required
+          />
+        </>,
+      ],
+      paymentUpdate: [
+        "Annotate payment",
+        <Field
+          label="Payment remarks"
+          name="remarks"
+          type="textarea"
+          value={r?.remarks}
+          required
+        />,
+      ],
+      feedbackReview: [
+        "Review client feedback",
+        <Field
+          label="Admin review notes"
+          name="notes"
+          type="textarea"
+          value={r?.reviewNotes}
+          required
+        />,
+      ],
+      notification: [
+        "Send notification",
+        <>
+          <Field
+            label="Recipient"
+            name="userId"
+            options={s.users
+              .filter((u) => u.active !== false)
+              .map((u) => ({ value: u.id, label: `${u.name} · ${u.role}` }))}
+            required
+          />
+          <Field label="Title" name="title" required />
+          <Field label="Message" name="message" type="textarea" required />
+        </>,
+      ],
+    }[modal.type];
+    title = config[0];
+    content = (
+      <Form onSubmit={(d) => act(modal.type, { ...d, id: r?.id })}>
+        {config[1]}
+      </Form>
     );
   }
   if (modal.type === "enroll") {
@@ -2950,26 +3378,27 @@ function PhotoUpload({ photos, onChange, disabled }) {
   );
 }
 function BookingForm({ onDone }) {
-  const { act } = useApp(),
+  const { act, user, s } = useApp(),
     [photos, setPhotos] = useState([]);
   return (
     <Form
       onSubmit={async (d) => onDone(await act("book", { ...d, photos }, true))}
       submit="Submit roofing booking"
     >
-      <Field
-        label="Full name"
-        name="name"
-        placeholder="Juan Dela Cruz"
-        required
-      />
-      <Field
-        label="Email address"
-        name="email"
-        type="email"
-        placeholder="you@example.com"
-        required
-      />
+      {user.role === "Admin" ? (
+        <Field
+          label="Client account"
+          name="clientId"
+          options={s.users
+            .filter((u) => u.role === "Client" && u.active !== false)
+            .map((u) => ({ value: u.id, label: `${u.name} · ${u.email}` }))}
+          required
+        />
+      ) : (
+        <div className="info full">
+          Booking for {user.name} · {user.email}
+        </div>
+      )}
       <Field
         label="Contact number"
         name="phone"
@@ -3256,10 +3685,14 @@ function QuotationEditor({ record, isNew }) {
   );
 }
 function ProjectDetail({ id, initialTab = "Overview" }) {
-  const { s, user, setModal } = useApp(),
+  const { s, user, setModal, act } = useApp(),
     [tab, setTab] = useState(initialTab);
   const p = s.projects.find((p) => p.id === id),
-    q = s.quotations.find((q) => q.id === p.quotationId),
+    q = s.quotations.find((q) => q.id === p.quotationId) || {
+      id: p.quotationId,
+      items: [],
+      total: 0,
+    },
     pay = paymentStatus(s, p),
     tasks = s.tasks.filter((t) => t.projectId === id),
     b = s.bookings.find((b) => b.id === p.bookingId),
@@ -3295,7 +3728,15 @@ function ProjectDetail({ id, initialTab = "Overview" }) {
         </div>
       </div>
       <div className="tabs">
-        {["Overview", "Tasks", "Materials", "Payments", "Timeline"].map((t) => (
+        {[
+          "Overview",
+          "Tasks",
+          ...(["Admin", "Client", "Foreman"].includes(user.role)
+            ? ["Materials"]
+            : []),
+          ...(["Admin", "Client"].includes(user.role) ? ["Payments"] : []),
+          "Timeline",
+        ].map((t) => (
           <button
             key={t}
             className={t === tab ? "active" : ""}
@@ -3313,16 +3754,18 @@ function ProjectDetail({ id, initialTab = "Overview" }) {
               <small>Client</small>
               <b>{p.client}</b>
             </div>
-            <div>
-              <small>Approved quotation</small>
-              <button
-                className="text-button"
-                onClick={() => setModal({ type: "quotation", record: q })}
-              >
-                {q.id}
-                <ArrowUpRight size={13} />
-              </button>
-            </div>
+            {["Admin", "Client", "Foreman"].includes(user.role) && (
+              <div>
+                <small>Approved quotation</small>
+                <button
+                  className="text-button"
+                  onClick={() => setModal({ type: "quotation", record: q })}
+                >
+                  {q.id}
+                  <ArrowUpRight size={13} />
+                </button>
+              </div>
+            )}
             <div>
               <small>Start date</small>
               <b>{day(p.start)}</b>
@@ -3331,19 +3774,45 @@ function ProjectDetail({ id, initialTab = "Overview" }) {
               <small>Estimated completion</small>
               <b>{day(p.end)}</b>
             </div>
-            <div>
-              <small>Project value</small>
-              <b>{money(q.total)}</b>
-            </div>
-            <div>
-              <small>Payment status</small>
-              <Badge>{pay.status}</Badge>
-            </div>
+            {["Admin", "Client"].includes(user.role) && (
+              <>
+                <div>
+                  <small>Project value</small>
+                  <b>{money(q.total)}</b>
+                </div>
+                <div>
+                  <small>Payment status</small>
+                  <Badge>{pay.status}</Badge>
+                </div>
+              </>
+            )}
           </div>
           <div className="info">
             Completion date is an estimate and may change due to weather, site
             conditions, materials, or additional work.
           </div>
+          {canManage && p.status !== "Completed" && (
+            <Form
+              onSubmit={(d) => act("progress", { ...d, projectId: p.id }, true)}
+              submit="Save site update"
+            >
+              <Field
+                label="Overall progress (%)"
+                name="progress"
+                type="number"
+                min="0"
+                max="100"
+                value={p.progress}
+                required
+              />
+              <Field
+                label="Site update shared with client"
+                name="notes"
+                type="textarea"
+                required
+              />
+            </Form>
+          )}
           <h4>Assigned personnel</h4>
           <div className="personnel-list">
             {foreman ? (
@@ -3363,6 +3832,7 @@ function ProjectDetail({ id, initialTab = "Overview" }) {
             )}
             {p.employeeIds.map((id) => {
               const u = s.users.find((u) => u.id === id);
+              if (!u) return null;
               return (
                 <div className="person-cell" key={id}>
                   <Avatar name={u.name} />
@@ -3372,13 +3842,15 @@ function ProjectDetail({ id, initialTab = "Overview" }) {
             })}
           </div>
           <div className="form-footer">
-            <a
-              className="text-button"
-              href={`/track/${b.token}`}
-              target="_blank"
-            >
-              Client tracking page <ExternalLink size={14} />
-            </a>
+            {["Admin", "Client"].includes(user.role) && b?.token && (
+              <a
+                className="text-button"
+                href={`/track/${b.token}`}
+                target="_blank"
+              >
+                Client tracking page <ExternalLink size={14} />
+              </a>
+            )}
             {user.role === "Admin" && !p.locked && p.status !== "Completed" && (
               <Button
                 variant="secondary"
@@ -3436,41 +3908,53 @@ function ProjectDetail({ id, initialTab = "Overview" }) {
           )}
         </>
       )}
-      {tab === "Materials" && (
-        <DataTable
-          headers={[
-            "Material",
-            "Planned",
-            "Delivered",
-            "Used",
-            "Remaining planned",
-            "",
-          ]}
-          rows={s.usage
-            .filter((u) => u.projectId === p.id)
-            .map((u) => {
-              const line = q.items.find((x) => x.materialId === u.materialId);
-              return [
-                <Name
-                  name={line.name}
-                  sub={`${money(line.price)} / ${line.unit}`}
-                />,
-                `${line.quantity} ${line.unit}`,
-                u.delivered,
-                u.used,
-                `${line.quantity - u.used} ${line.unit}`,
-                canManage && (
-                  <Button
-                    variant="small secondary"
-                    onClick={() => setModal({ type: "usage", record: u })}
-                  >
-                    Update
-                  </Button>
-                ),
-              ];
-            })}
-        />
-      )}
+      {tab === "Materials" &&
+        (user.role === "Client" ? (
+          <DataTable
+            headers={["Material", "Quantity", "Unit", "Unit price", "Subtotal"]}
+            rows={q.items.map((i) => [
+              i.name,
+              i.quantity,
+              i.unit,
+              money(i.price),
+              money(i.quantity * i.price),
+            ])}
+          />
+        ) : (
+          <DataTable
+            headers={[
+              "Material",
+              "Planned",
+              "Delivered",
+              "Used",
+              "Remaining planned",
+              "",
+            ]}
+            rows={s.usage
+              .filter((u) => u.projectId === p.id)
+              .map((u) => {
+                const line = q.items.find((x) => x.materialId === u.materialId);
+                return [
+                  <Name
+                    name={line.name}
+                    sub={`${money(line.price)} / ${line.unit}`}
+                  />,
+                  `${line.quantity} ${line.unit}`,
+                  u.delivered,
+                  u.used,
+                  `${line.quantity - u.used} ${line.unit}`,
+                  canManage && (
+                    <Button
+                      variant="small secondary"
+                      onClick={() => setModal({ type: "usage", record: u })}
+                    >
+                      Update
+                    </Button>
+                  ),
+                ];
+              })}
+          />
+        ))}
       {tab === "Payments" && (
         <>
           <div className="summary-strip">
@@ -3488,7 +3972,7 @@ function ProjectDetail({ id, initialTab = "Overview" }) {
             </div>
           </div>
           <DataTable
-            headers={["Date", "Amount", "Method", "Reference"]}
+            headers={["Date", "Amount", "Method", "Reference", "Remarks", ""]}
             rows={s.payments
               .filter((x) => x.projectId === p.id)
               .map((x) => [
@@ -3496,6 +3980,19 @@ function ProjectDetail({ id, initialTab = "Overview" }) {
                 money(x.amount),
                 x.method,
                 x.reference,
+                x.remarks || "—",
+                user.role === "Admin" ? (
+                  <Button
+                    variant="small secondary"
+                    onClick={() =>
+                      setModal({ type: "paymentUpdate", record: x })
+                    }
+                  >
+                    Annotate
+                  </Button>
+                ) : (
+                  ""
+                ),
               ])}
           />
           {user.role === "Admin" && !p.locked && pay.balance > 0 && (
@@ -3572,6 +4069,7 @@ function Attendance() {
             "Hours",
             "Geotag",
             "Verification",
+            "",
           ]}
           rows={entries.map((a) => [
             s.users.find((u) => u.id === a.userId)?.name,
@@ -3594,6 +4092,20 @@ function Attendance() {
               name={a.verified ? "Verified" : "Unverified"}
               sub={a.source}
             />,
+            user.role === "Admin" &&
+            a.checkOut &&
+            !s.payroll.some((p) => p.attendanceIds.includes(a.id)) ? (
+              <Button
+                variant="small secondary"
+                onClick={() =>
+                  setModal({ type: "attendanceUpdate", record: a })
+                }
+              >
+                Correct hours
+              </Button>
+            ) : (
+              ""
+            ),
           ])}
         />
       </section>
@@ -3705,7 +4217,7 @@ function CameraCapture({ enrollUser }) {
         {enrollUser
           ? "Admin-supervised enrollment saves a 128-value face descriptor for this employee."
           : "Your face is compared with your enrolled descriptor. Your assigned project is selected automatically."}{" "}
-        This prototype does not perform liveness detection.
+        Face verification does not perform liveness detection.
       </div>
       <Button disabled={busy} onClick={ready ? capture : start}>
         {busy ? (
@@ -3738,7 +4250,7 @@ function PublicHeader() {
         <a href="/home#process">How it works</a>
         <a href="/track">Track my project</a>
         <a href="/" className="public-login">
-          Demo workspace <ArrowUpRight size={15} />
+          Sign in <ArrowUpRight size={15} />
         </a>
       </nav>
     </header>
@@ -3755,7 +4267,7 @@ function PublicPage({ initial }) {
         <div className="public-form card">
           <div className="eyebrow">LET’S BUILD SOMETHING LASTING</div>
           <h1>Book a Roofing Service</h1>
-          <p>No account required. A better roof starts here.</p>
+          <p>Sign in to your client account. A better roof starts here.</p>
           {success ? (
             <div className="success-panel">
               <CheckCircle2 size={44} />
@@ -3911,7 +4423,10 @@ function PublicPage({ initial }) {
         </>
       )}
       <footer className="public-footer">
-        <span>© 2026 ENG Roofing Supply & Installation Services</span>
+        <span>
+          © {new Date().getFullYear()} ENG Roofing Supply & Installation
+          Services
+        </span>
         <span>
           Integrated Payroll System and Roofing Project Management System with
           Client Feedback Analysis
@@ -3921,7 +4436,7 @@ function PublicPage({ initial }) {
   );
 }
 function Tracking({ token }) {
-  const { act } = useApp(),
+  const { act, user } = useApp(),
     [data, setData] = useState(null),
     [error, setError] = useState(""),
     [actionError, setActionError] = useState(""),
@@ -4072,33 +4587,34 @@ function Tracking({ token }) {
                       <b>{money(data.balance ?? q.total)}</b>
                     </div>
                     <p className="muted">{q.notes}</p>
-                    {q.status === "Awaiting Client" && (
-                      <div className="form-footer">
-                        <Button
-                          variant="secondary"
-                          disabled={busy}
-                          onClick={() =>
-                            change("quoteDecision", {
-                              id: q.id,
-                              status: "Rejected",
-                            })
-                          }
-                        >
-                          Reject quotation
-                        </Button>
-                        <Button
-                          disabled={busy}
-                          onClick={() =>
-                            change("quoteDecision", {
-                              id: q.id,
-                              status: "Approved",
-                            })
-                          }
-                        >
-                          Approve quotation <Check size={16} />
-                        </Button>
-                      </div>
-                    )}
+                    {user.role === "Client" &&
+                      q.status === "Awaiting Client" && (
+                        <div className="form-footer">
+                          <Button
+                            variant="secondary"
+                            disabled={busy}
+                            onClick={() =>
+                              change("quoteDecision", {
+                                id: q.id,
+                                status: "Rejected",
+                              })
+                            }
+                          >
+                            Reject quotation
+                          </Button>
+                          <Button
+                            disabled={busy}
+                            onClick={() =>
+                              change("quoteDecision", {
+                                id: q.id,
+                                status: "Approved",
+                              })
+                            }
+                          >
+                            Approve quotation <Check size={16} />
+                          </Button>
+                        </div>
+                      )}
                     {data.payments.length > 0 && (
                       <>
                         <h4>Payments received</h4>
@@ -4122,7 +4638,7 @@ function Tracking({ token }) {
                 )}
               </section>
             </div>
-            {p?.status === "Completed" && (
+            {user.role === "Client" && p?.status === "Completed" && (
               <section className="card padded feedback-form">
                 <h2>How did we do?</h2>
                 <p>Your feedback helps us build a better roofing experience.</p>
@@ -4227,7 +4743,7 @@ function PersonnelVerify({ id }) {
       <div className="public-form card profile-card">
         {person ? (
           <>
-            <ShieldCheck size={42} color="#286b4e" />
+            <ShieldCheck size={42} color="#b91c1c" />
             <h2>Verified ENG personnel</h2>
             <Avatar name={person.name} photo={person.photo} />
             <h1>{person.name}</h1>

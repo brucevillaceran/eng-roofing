@@ -1,31 +1,4 @@
-export const profiles = [
-  "Rib-Type / Ribbed",
-  "Corrugated",
-  "Tile Profile",
-  "Standing Seam",
-  "R-Span",
-  "Metal Deck",
-  "Curved Roof",
-  "Spandrel",
-  "Other",
-  "Not Determined",
-];
-export const accessories = [
-  "Ridge Cap",
-  "Valley Flashing",
-  "Eaves Flashing",
-  "Barge/Side Flashing",
-  "Sidewall Flashing",
-  "Endwall Flashing",
-  "Drip Edge",
-  "Gutter",
-  "Downspout",
-  "Closure Strip",
-  "Ridge Roll",
-  "Roofing Screws",
-  "Sealant",
-  "Other",
-];
+export { profiles, accessories } from "../shared/roofing.js";
 export function seed() {
   const materials = [
     ["Banawe", "SQM", 500],

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { hashPassword, verifyPassword, validEmail, roles } from "./auth.js";
 export const services = [
   "Roof Installation",
   "Roof Replacement",
@@ -34,7 +35,10 @@ const date = (v, label) => {
   return v;
 };
 const text = (v, label) => {
-  need(typeof v === "string" && v.trim().length > 0, `${label} is required.`);
+  need(
+    typeof v === "string" && v.trim().length > 0 && v.length <= 10000,
+    `${label} is required.`,
+  );
   return v.trim();
 };
 export const balance = (s, p) =>
@@ -44,9 +48,24 @@ export const balance = (s, p) =>
         .filter((x) => x.projectId === p.id)
         .reduce((a, x) => a + x.amount, 0),
   );
-export function apply(s, action, d, actor = { role: "Guest" }) {
+export function apply(s, action, d, actor = {}) {
+  const deny = (condition, message) => {
+    if (!condition) {
+      const error = new Error(message);
+      error.status = 403;
+      throw error;
+    }
+  };
+  const account = s.users.find((u) => u.id === actor.id);
+  deny(
+    account &&
+      account.active !== false &&
+      account.role === actor.role &&
+      roles.includes(actor.role),
+    "An active authenticated account is required.",
+  );
   const permit = (...roles) =>
-    need(
+    deny(
       roles.includes(actor.role),
       "This action is unavailable for your role.",
     );
@@ -60,21 +79,30 @@ export function apply(s, action, d, actor = { role: "Guest" }) {
       "Completed project work is preserved; only remaining payments can be recorded.",
     );
     if (actor.role === "Foreman")
-      need(
+      deny(
         p.foremanId === actor.id,
         "This project is assigned to another foreman.",
       );
     return p;
   };
-  const notify = (role, title, message) =>
-    s.notifications.unshift({
-      id: id("NT"),
-      role,
-      title,
-      message,
-      createdAt: now(),
-      read: false,
-    });
+  const notify = (role, title, message, userIds = []) => {
+    const recipients = s.users.filter(
+      (u) =>
+        u.active !== false &&
+        u.role === role &&
+        (userIds.length ? userIds.includes(u.id) : role === "Admin"),
+    );
+    for (const u of recipients)
+      s.notifications.unshift({
+        id: id("NT"),
+        userId: u.id,
+        role,
+        title,
+        message,
+        createdAt: now(),
+        read: false,
+      });
+  };
   const email = (b, subject, message, path) =>
     s.emails.unshift({
       id: id("MAIL"),
@@ -86,10 +114,15 @@ export function apply(s, action, d, actor = { role: "Guest" }) {
       status: "Local preview",
     });
   const event = (p, message) => {
-    p.timeline.push({ text: message, at: now() });
+    p.timeline.push({
+      text: message,
+      at: now(),
+      actorId: actor.id,
+      progress: p.progress,
+    });
     notify("Admin", "Project update", `${p.name}: ${message}`);
-    notify("Client", "Project update", `${p.name}: ${message}`);
     const b = get("bookings", p.bookingId);
+    notify("Client", "Project update", `${p.name}: ${message}`, [b.clientId]);
     email(
       b,
       "Roofing project update",
@@ -99,15 +132,24 @@ export function apply(s, action, d, actor = { role: "Guest" }) {
   };
   const tracking = (b) => `/track/${b.token}`;
   const clientBooking = () => {
+    permit("Client");
     const b = s.bookings.find((x) => x.token === d.token);
     need(b, "Tracking link is invalid.");
+    deny(b.clientId === actor.id, "This booking belongs to another client.");
     return b;
   };
   let result;
   switch (action) {
     case "book": {
-      const name = text(d.name, "Full name"),
-        emailAddress = text(d.email, "Email");
+      permit("Admin", "Client");
+      const owner =
+        actor.role === "Client" ? account : get("users", d.clientId);
+      need(
+        owner.role === "Client" && owner.active !== false,
+        "Choose an active client account.",
+      );
+      const name = owner.name,
+        emailAddress = owner.email;
       need(
         /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailAddress),
         "Enter a valid email address.",
@@ -118,6 +160,7 @@ export function apply(s, action, d, actor = { role: "Guest" }) {
       );
       const b = {
         id: id("BK"),
+        clientId: owner.id,
         name,
         email: emailAddress,
         phone: text(d.phone, "Contact number"),
@@ -151,6 +194,24 @@ export function apply(s, action, d, actor = { role: "Guest" }) {
       result = { id: b.id, token: b.token, submitted_at: b.submitted_at };
       break;
     }
+    case "bookingOwner": {
+      permit("Admin");
+      const b = get("bookings", d.id),
+        u = get("users", d.clientId);
+      need(!b.clientId, "This booking is already linked to a client account.");
+      need(
+        u.role === "Client" && u.active !== false,
+        "Choose an active client account.",
+      );
+      b.clientId = u.id;
+      notify(
+        "Client",
+        "Booking linked to your account",
+        `${b.id}: ${b.service}`,
+        [u.id],
+      );
+      break;
+    }
     case "booking": {
       permit("Admin");
       const b = get("bookings", d.id);
@@ -180,7 +241,11 @@ export function apply(s, action, d, actor = { role: "Guest" }) {
         time: d.time || b.time,
       });
       if (d.status === "For Inspection") {
-        need(get("users", d.foremanId).role === "Foreman", "Assign a foreman.");
+        need(
+          get("users", d.foremanId).role === "Foreman" &&
+            get("users", d.foremanId).active !== false,
+          "Assign an active foreman.",
+        );
         const existing = s.inspections.find((i) => i.bookingId === b.id);
         const values = {
           bookingId: b.id,
@@ -203,8 +268,11 @@ export function apply(s, action, d, actor = { role: "Guest" }) {
             notes: "",
             photos: [],
           });
-        notify("Foreman", "Inspection assigned", `${b.name} · ${b.date}`);
+        notify("Foreman", "Inspection assigned", `${b.name} · ${b.date}`, [
+          d.foremanId,
+        ]);
       }
+      notify("Client", "Booking update", `${b.id}: ${b.status}`, [b.clientId]);
       email(
         b,
         "Booking update",
@@ -217,7 +285,7 @@ export function apply(s, action, d, actor = { role: "Guest" }) {
       permit("Foreman", "Admin");
       const i = get("inspections", d.id);
       if (actor.role === "Foreman")
-        need(
+        deny(
           i.foremanId === actor.id,
           "Inspection is assigned to another foreman.",
         );
@@ -236,10 +304,17 @@ export function apply(s, action, d, actor = { role: "Guest" }) {
         condition: text(d.condition, "Condition"),
         accessories: d.accessories || [],
         notes: d.notes || "",
+        clientNotes: d.clientNotes || "",
         photos: d.photos || [],
         date: date(d.date, "Inspection date"),
         status: "Completed",
       });
+      notify(
+        "Client",
+        "Inspection completed",
+        `${i.id}: ${i.clientNotes || "Inspection results are available."}`,
+        [get("bookings", i.bookingId).clientId],
+      );
       break;
     }
     case "estimate": {
@@ -247,7 +322,7 @@ export function apply(s, action, d, actor = { role: "Guest" }) {
       const i = get("inspections", d.inspectionId);
       need(i.status === "Completed", "Complete the site inspection first.");
       if (actor.role === "Foreman")
-        need(
+        deny(
           i.foremanId === actor.id,
           "Inspection is assigned to another foreman.",
         );
@@ -340,6 +415,7 @@ export function apply(s, action, d, actor = { role: "Guest" }) {
         "Client",
         "Quotation available",
         `${q.id} is ready for your review.`,
+        [b.clientId],
       );
       break;
     }
@@ -421,12 +497,20 @@ export function apply(s, action, d, actor = { role: "Guest" }) {
         "Use the completion action to complete a project.",
       );
       need(
-        !d.foremanId || get("users", d.foremanId).role === "Foreman",
+        !d.foremanId ||
+          (get("users", d.foremanId).role === "Foreman" &&
+            get("users", d.foremanId).active !== false),
         "Invalid foreman.",
       );
       const employeeIds = d.employeeIds || [];
       need(
-        employeeIds.every((e) => get("users", e).role === "Employee"),
+        Array.isArray(employeeIds) &&
+          new Set(employeeIds).size === employeeIds.length &&
+          employeeIds.every(
+            (e) =>
+              get("users", e).role === "Employee" &&
+              get("users", e).active !== false,
+          ),
         "Invalid employee assignment.",
       );
       if (["Scheduled", "Ongoing"].includes(d.status)) {
@@ -461,8 +545,9 @@ export function apply(s, action, d, actor = { role: "Guest" }) {
         "Employee",
         "Project assignment",
         `${p.name} · ${p.start || "Schedule pending"}`,
+        p.employeeIds,
       );
-      notify("Foreman", "Project assignment", p.name);
+      notify("Foreman", "Project assignment", p.name, [p.foremanId]);
       break;
     }
     case "task": {
@@ -535,6 +620,12 @@ export function apply(s, action, d, actor = { role: "Guest" }) {
         tracking(b),
       );
       notify("Admin", "Payment received", p.name);
+      notify(
+        "Client",
+        "Payment received",
+        `${p.name}: ₱${amount}. Balance: ₱${balance(s, p)}`,
+        [b.clientId],
+      );
       if (p.status === "Completed" && balance(s, p) === 0) p.locked = true;
       break;
     }
@@ -628,22 +719,57 @@ export function apply(s, action, d, actor = { role: "Guest" }) {
     }
     case "user": {
       permit("Admin");
+      need(roles.includes(d.role), "Invalid role.");
+      const u = d.id
+        ? get("users", d.id)
+        : { id: id("USR"), sessionVersion: 0 };
+      const emailAddress = validEmail(d.email);
       need(
-        ["Admin", "Foreman", "Employee", "Client"].includes(d.role),
-        "Invalid role.",
+        !s.users.some(
+          (other) =>
+            other.id !== u.id && other.email.toLowerCase() === emailAddress,
+        ),
+        "Email already belongs to another account.",
       );
-      const u = d.id ? get("users", d.id) : { id: id("USR") };
-      need(
-        !d.id || u.role === d.role,
-        "Existing personnel roles cannot be changed.",
-      );
+      const active = d.active !== false && d.active !== "Inactive";
+      if (u.role === "Admin" && (!active || d.role !== "Admin"))
+        need(
+          s.users.some(
+            (other) =>
+              other.id !== u.id &&
+              other.role === "Admin" &&
+              other.active !== false &&
+              other.passwordHash,
+          ),
+          "At least one active administrator must remain.",
+        );
+      if (d.id && u.role !== d.role) {
+        need(
+          !s.projects.some(
+            (p) => p.foremanId === u.id || p.employeeIds.includes(u.id),
+          ) &&
+            !s.inspections.some((i) => i.foremanId === u.id) &&
+            !s.bookings.some((b) => b.clientId === u.id) &&
+            !s.attendance.some((a) => a.userId === u.id) &&
+            !s.payroll.some((p) => p.userId === u.id),
+          "This account has linked role records. Preserve its role and create a separate account if needed.",
+        );
+      }
+      if (!d.id || d.password) u.passwordHash = hashPassword(d.password);
+      else
+        need(
+          u.passwordHash,
+          "Set an initial password for this existing account.",
+        );
+      u.sessionVersion = (u.sessionVersion || 0) + 1;
       Object.assign(u, {
         name: text(d.name, "Name"),
         role: d.role,
-        email: text(d.email, "Email"),
+        email: emailAddress,
         contact: text(d.contact, "Contact"),
         photo: d.photo || u.photo || "",
         rate: num(d.rate || 0, "Daily rate"),
+        active,
         initials: d.name
           .split(" ")
           .map((x) => x[0])
@@ -651,6 +777,107 @@ export function apply(s, action, d, actor = { role: "Guest" }) {
           .join(""),
       });
       if (!d.id) s.users.push(u);
+      break;
+    }
+    case "profile": {
+      const u = get("users", actor.id);
+      u.name = text(d.name, "Name");
+      u.contact = text(d.contact, "Contact");
+      if (d.password) {
+        const { currentPassword } = d;
+        // Password changes require the current credential even with an active session.
+        need(
+          verifyPassword(currentPassword, u.passwordHash),
+          "Current password is incorrect.",
+        );
+        u.passwordHash = hashPassword(d.password);
+        u.sessionVersion = (u.sessionVersion || 0) + 1;
+      }
+      break;
+    }
+    case "progress": {
+      permit("Admin", "Foreman");
+      const p = project(d.projectId),
+        progress = num(d.progress, "Progress");
+      need(progress <= 100, "Progress cannot exceed 100%.");
+      p.progress = progress;
+      event(p, text(d.notes, "Site update"));
+      break;
+    }
+    case "attendanceUpdate": {
+      permit("Admin");
+      const a = get("attendance", d.id);
+      need(
+        !s.payroll.some((p) => p.attendanceIds.includes(a.id)),
+        "Attendance used by payroll is preserved.",
+      );
+      const hours = num(d.hours, "Verified hours");
+      need(
+        a.checkOut && hours <= 8,
+        "Only completed attendance can be corrected (maximum eight hours).",
+      );
+      a.corrections ||= [];
+      a.corrections.push({
+        previousHours: a.hours,
+        hours,
+        reason: text(d.reason, "Correction reason"),
+        actorId: actor.id,
+        at: now(),
+      });
+      a.hours = hours;
+      break;
+    }
+    case "paymentUpdate": {
+      permit("Admin");
+      const p = get("payments", d.id);
+      p.annotations ||= [];
+      const remarks = text(d.remarks, "Payment annotation");
+      p.annotations.push({
+        previousRemarks: p.remarks || "",
+        remarks,
+        actorId: actor.id,
+        at: now(),
+      });
+      p.remarks = remarks;
+      p.updatedAt = now();
+      break;
+    }
+    case "payrollUpdate": {
+      permit("Admin");
+      const p = get("payroll", d.id);
+      need(p.status !== "Paid", "Released payroll is preserved.");
+      const deductions = money(num(d.deductions, "Deductions"));
+      need(deductions <= p.gross, "Deductions cannot exceed gross pay.");
+      p.adjustments ||= [];
+      const reason = text(d.reason, "Correction reason");
+      p.adjustments.push({
+        previousDeductions: p.deductions,
+        deductions,
+        reason,
+        actorId: actor.id,
+        at: now(),
+      });
+      p.deductions = deductions;
+      p.net = money(p.gross - deductions);
+      p.correctionReason = reason;
+      break;
+    }
+    case "feedbackReview": {
+      permit("Admin");
+      const f = get("feedback", d.id);
+      f.reviewNotes = text(d.notes, "Review notes");
+      f.reviewedAt = now();
+      break;
+    }
+    case "notification": {
+      permit("Admin");
+      const recipient = get("users", d.userId);
+      notify(
+        recipient.role,
+        text(d.title, "Title"),
+        text(d.message, "Message"),
+        [recipient.id],
+      );
       break;
     }
     case "enroll": {
@@ -738,7 +965,7 @@ export function apply(s, action, d, actor = { role: "Guest" }) {
       };
       s.attendance.push(a);
       result = a;
-      notify(u.role, "Attendance recorded", `${u.name} · ${p.name}`);
+      notify(u.role, "Attendance recorded", `${u.name} · ${p.name}`, [u.id]);
       break;
     }
     case "payroll": {
@@ -788,18 +1015,27 @@ export function apply(s, action, d, actor = { role: "Guest" }) {
         status: "Processed",
         createdAt: now(),
       });
-      notify(u.role, "Payroll available", `${u.name} · ${from} to ${to}`);
+      notify(u.role, "Payroll available", `${u.name} · ${from} to ${to}`, [
+        u.id,
+      ]);
       break;
     }
     case "payrollPaid": {
       permit("Admin");
-      get("payroll", d.id).status = "Paid";
+      const p = get("payroll", d.id);
+      need(p.status !== "Paid", "Payroll is already released.");
+      p.status = "Paid";
+      p.releasedAt = now();
+      const u = get("users", p.userId);
+      notify(u.role, "Payroll released", `${p.from} to ${p.to}: ₱${p.net}`, [
+        u.id,
+      ]);
       break;
     }
     case "read": {
       permit("Admin", "Foreman", "Employee", "Client");
       s.notifications
-        .filter((n) => n.role === actor.role)
+        .filter((n) => n.userId === actor.id)
         .forEach((n) => (n.read = true));
       break;
     }
