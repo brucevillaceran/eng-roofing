@@ -1,6 +1,6 @@
 import express from "express";
 import { apply, balance } from "./domain.js";
-import { configureAuth, authenticated } from "./auth.js";
+import { configureAuth, authenticated, authorizeSession } from "./auth.js";
 import { visibleState } from "./access.js";
 export function createApi(store) {
   const app = express();
@@ -25,12 +25,20 @@ export function createApi(store) {
     next();
   });
   configureAuth(app, store);
-  app.get("/api/health", (_, res) => res.json({ ok: true }));
-  app.get("/api/state", authenticated, (req, res) =>
-    res.json(visibleState(store.read(), req.user)),
+  async function readAuthorized(req) {
+    const s = await store.read();
+    await authorizeSession(store.db, req, s);
+    return s;
+  }
+  app.get("/api/health", async (_, res) => {
+    await store.db.query("SELECT 1");
+    res.json({ ok: true });
+  });
+  app.get("/api/state", authenticated, async (req, res) =>
+    res.json(visibleState(await readAuthorized(req), req.user)),
   );
-  app.get("/api/track/:token", authenticated, (req, res) => {
-    const s = visibleState(store.read(), req.user),
+  app.get("/api/track/:token", authenticated, async (req, res) => {
+    const s = visibleState(await readAuthorized(req), req.user),
       b = s.bookings.find((b) => b.token === req.params.token);
     if (!b || !["Admin", "Client"].includes(req.user.role))
       return res
@@ -54,15 +62,15 @@ export function createApi(store) {
       balance: project ? balance(s, project) : null,
     });
   });
-  app.get("/api/personnel/:id", authenticated, (req, res) => {
-    const u = visibleState(store.read(), req.user).users.find(
+  app.get("/api/personnel/:id", authenticated, async (req, res) => {
+    const u = visibleState(await readAuthorized(req), req.user).users.find(
       (u) => u.id === req.params.id && u.role === "Foreman",
     );
     if (!u) return res.status(404).json({ error: "Personnel not found." });
     const { id, name, role, contact, initials, photo } = u;
     res.json({ id, name, role, contact, initials, photo });
   });
-  app.post("/api/action", authenticated, (req, res) => {
+  app.post("/api/action", authenticated, async (req, res) => {
     try {
       if (
         typeof req.body.action !== "string" ||
@@ -71,12 +79,17 @@ export function createApi(store) {
         Array.isArray(req.body.data)
       )
         return res.status(400).json({ error: "Invalid action request." });
-      const s = store.read(),
-        result = apply(s, req.body.action, req.body.data, req.user);
-      store.save(s);
+      const result = await store.transaction(async (s, connection) => {
+        await authorizeSession(connection, req, s);
+        return apply(s, req.body.action, req.body.data, req.user);
+      });
       res.json(result);
     } catch (e) {
-      res.status(e.status || 400).json({ error: e.message });
+      res.status(e.status || (e.code ? 500 : 400)).json({
+        error: e.code
+          ? "Database operation failed; no changes were saved."
+          : e.message,
+      });
     }
   });
   app.use("/api", (_, res) =>

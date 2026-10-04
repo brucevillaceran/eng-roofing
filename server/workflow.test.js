@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { seed } from "./seed.js";
 import { apply as domainApply, balance } from "./domain.js";
-import { createStore } from "./store.js";
+import { createStore } from "./test-database.js";
 // Fixtures remain optional sample data; workflow actions now use actual client identities.
 function apply(s, action, data, actor) {
   for (const b of s.bookings) {
@@ -426,25 +426,28 @@ test("payroll uses only completed verified attendance, prevents overlap and reta
     /No completed/,
   );
 });
-test("SQLite round trip and atomic transaction rollback", () => {
-  const store = createStore(":memory:", { sample: true }),
-    s = store.read();
+test("MySQL round trip and atomic transaction rollback", async () => {
+  const store = await createStore(":memory:", { sample: true }),
+    s = await store.read();
   const b = apply(s, "book", booking());
-  store.save(s);
-  assert.equal(store.read().bookings.find((x) => x.id === b.id).token, b.token);
-  const invalid = store.read();
+  await store.save(s);
+  assert.equal(
+    (await store.read()).bookings.find((x) => x.id === b.id).token,
+    b.token,
+  );
+  const invalid = await store.read();
   invalid.bookings.push(invalid.bookings[0]);
-  assert.throws(() => store.save(invalid));
-  assert.equal(store.read().bookings.length, s.bookings.length);
-  store.close();
+  await assert.rejects(() => store.save(invalid));
+  assert.equal((await store.read()).bookings.length, s.bookings.length);
+  await store?.close();
 });
-test("database foreign keys reject orphan relationships", () => {
-  const store = createStore(":memory:", { sample: true }),
-    s = store.read();
+test("database foreign keys reject orphan relationships", async () => {
+  const store = await createStore(":memory:", { sample: true }),
+    s = await store.read();
   s.projects[0].quotationId = "MISSING";
-  assert.throws(() => store.save(s), /FOREIGN KEY/);
-  assert.equal(store.read().projects[0].quotationId, "QT-001");
-  store.close();
+  await assert.rejects(() => store.save(s), /foreign key/i);
+  assert.equal((await store.read()).projects[0].quotationId, "QT-001");
+  await store?.close();
 });
 test("completed unpaid work is immutable while final payment remains allowed", () => {
   const s = seed(),

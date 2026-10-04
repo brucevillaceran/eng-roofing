@@ -2,42 +2,143 @@
 
 **Integrated Payroll System and Roofing Project Management System with Client Feedback Analysis**
 
-React + Vite, Express, Node SQLite, Recharts, and face-api.js. The existing booking, inspection, quotation, project, attendance, payroll, payment, and feedback modules share a persistent database with authenticated user portals.
+React + Vite frontend, Node.js + Express backend, **MySQL/MariaDB via mysql2 connection pooling**, Recharts, and face-api.js. The red UI, four roles (**Admin, Foreman, Employee, Client**), APIs, calculations, and workflow are preserved. SQLite is no longer the active application database.
 
-## Run and create the first administrator
+## XAMPP / phpMyAdmin setup
 
-Requires Node 24+ and npm.
+Requires **Node.js 24+**, npm, and MySQL 8+ or MariaDB 10.4+ (verified with MariaDB 10.11.18). XAMPP supplies Apache, PHP, and MySQL/MariaDB; Node still runs ENG Roofing.
 
-```bash
-npm ci
-npm run dev
-```
+1. Install/start XAMPP. Start **MySQL** (often MariaDB internally). Start **Apache** to open phpMyAdmin; Apache is not required to serve the application during Node/Vite development.
+2. Open **http://localhost/phpmyadmin** (or XAMPP's MySQL **Admin** button). In SQL, create your database:
 
-Open **http://localhost:3000**. Public information is at `/home`; `/login` opens authentication. Clients can register; staff accounts are created by Admin. There are exactly four roles: **Admin, Foreman, Employee, Client**.
+   ```sql
+   CREATE DATABASE eng_roofing CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+   ```
 
-A new database starts with company settings and **no sample users, materials, or business records**. Create the first Admin through the local operator command. Use a private file containing a password of 12–128 characters, then remove that file:
+3. Select `eng_roofing`, choose **Import**, and import **database/schema.sql**. The schema uses `CREATE TABLE IF NOT EXISTS`; it does not drop tables or delete existing data. Do not import into an unrelated application's database.
+4. In the repository folder, copy `.env.example` to `.env` (Windows Command Prompt: `copy .env.example .env`; macOS/Linux: `cp .env.example .env`). Configure:
+
+   ```dotenv
+   DB_DRIVER=mysql
+   DB_HOST=localhost
+   DB_PORT=3306
+   DB_NAME=eng_roofing
+   DB_USER=root
+   DB_PASSWORD=
+   PORT=3000
+   ```
+
+   `DB_DRIVER=mysql` and `DB_DRIVER=mariadb` both use mysql2's compatible protocol. Adjust host, port, name, user, and password to your installation. Empty password matches a default local XAMPP setup; use your actual configured password and a dedicated database user for deployment. Credentials remain server-side and `.env` is ignored by Git; never use `VITE_` prefixes for credentials. Existing process environment variables take precedence over `.env`.
+
+5. Install dependencies and check the connection:
+
+   ```bash
+   npm install
+   npm run db:check
+   ```
+
+   As an alternative to phpMyAdmin's schema import, run `npm run db:init` once after creating the database. It is safe to rerun; it does not reset data. Company settings are initialized on first application startup, without sample accounts/business records.
+
+6. If migrating existing SQLite records, follow the migration instructions below **before creating any new users or records**. Otherwise create the first Admin as described below.
+7. Start the application:
+
+   ```bash
+   npm run dev
+   ```
+
+   **This single command starts both Express and the React/Vite frontend on http://localhost:3000.** No separate frontend command or PHP conversion is needed. Open `/login`; public information is at `/home`. Clients can register; Admin creates staff accounts.
+
+**phpMyAdmin is a database management interface. Express connects directly to MySQL/MariaDB using `server/database.js`; it does not connect through phpMyAdmin.** Do not copy the entire project, `.env`, or SQLite backups into Apache's public `htdocs`. Apache may serve the built frontend in a separately configured production deployment, but the Express API is still required.
+
+### Connection troubleshooting
+
+- `ECONNREFUSED`: start XAMPP MySQL and check `DB_HOST`/`DB_PORT`. Use `127.0.0.1` if your localhost resolution differs from the server's TCP bind address.
+- Access denied: correct `DB_USER`/`DB_PASSWORD` and grant access to `DB_NAME`.
+- Unknown database/table: create the database, select it before importing `database/schema.sql`, then run `npm run db:check`.
+- Large media uploads: configure MySQL/MariaDB `max_allowed_packet=64M` or higher in XAMPP's `my.ini`, then restart MySQL. Express retains the existing 12 MB request limit; facial descriptors and photos remain server-persisted.
+- Never run two different versions of the application against the same data during migration.
+
+## Safe migration from SQLite
+
+Migration is an explicit **offline operator command**. Runtime code never initializes, queries, or writes SQLite. Only the standalone importer and its legacy-fixture tests use `node:sqlite`.
+
+1. Stop the old SQLite application and any new MySQL application processes. Retain `data/eng-roofing.sqlite` and its WAL/SHM files. Keep a separate backup before deployment.
+2. Configure `.env` for an **empty** target database. Create it and import the schema, or run `npm run db:init`. Do not bootstrap Admin or enter records yet.
+3. Run:
+
+   ```bash
+   npm run db:migrate -- data/eng-roofing.sqlite
+   ```
+
+   Custom source paths are accepted, quoted if they contain spaces. The importer creates a consistent SQLite backup next to the source, including committed WAL data. It opens the source read-only and never deletes it.
+
+4. The importer verifies redundant SQLite relationship tables, maps every supported field, and inserts records in foreign-key order inside one MySQL transaction. It compares every reconstructed entity and authentication record before committing. IDs, passwords, sessions, CSRF tokens, expiration timestamps, attempt counters, assignments, BOQ prices, attendance/payroll links, progress and correction histories are preserved. Unmapped fields, invalid relationships, unsupported roles, or lossy conversions fail with rollback instead of silently discarding data.
+5. A `sqlite-import-v1` migration record stores the source checksum, counts, and import timestamp. An already imported target, existing business/authentication records, or customized settings cause refusal. There is no overwrite/reset flag. To repeat a migration, use another empty database; retain the failed target for investigation if needed.
+6. Run `npm run db:check`, start `npm run dev`, verify your accounts and records, and inspect tables in phpMyAdmin. Keep the original SQLite source and backup until you have independently verified the migration and backed up MySQL. Switching `.env` to MySQL does not synchronize subsequent changes back to SQLite.
+
+Legacy user defaults (`active`, `sessionVersion`) are filled explicitly. Only a source without the existing `account-ownership-v1` marker gets the original one-time, unambiguous existing-client email linkage. Registering an email later never claims guest records. Unmatched bookings remain Admin-managed. Legacy notifications without a trustworthy recipient are retained as historical rows but are not shown in any user's notification feed. Legacy accounts without password hashes need credential initialization through Admin account management; existing hashes need no reset.
+
+## First administrator and production
+
+Create/recover an Admin with the local operator command. Put a 12–128 character password in a private file, then remove that file:
 
 ```bash
 npm run admin -- "your-admin@example.com" "Your name" < /path/to/private/password-file
 ```
 
-The same command can recover an existing Admin account, invalidating its previous sessions. It cannot promote another role. Credentials are never hardcoded. Admin can create users, set/reset initial passwords, assign valid roles, activate/deactivate accounts, and enroll field personnel. Changing a role with existing linked business records is rejected to preserve record ownership; create a separate account when needed. The last usable Admin cannot be deactivated or demoted.
+The same stdin redirection works in Windows Command Prompt using your local file path. In PowerShell, use `Get-Content .\private-password.txt | npm run admin -- "your-admin@example.com" "Your name"`. This command invalidates the Admin's previous sessions and cannot promote an account belonging to another role. Existing linked business records prevent unsafe role changes; the last usable Admin cannot be deactivated/demoted.
 
 ```bash
-npm test       # Workflow, persistence, and multi-user HTTP/security tests
-npm run build # Production bundle
-npm start     # Production server; HTTPS is required for secure cookies
+npm run build # Build React into dist/
+npm start     # Express serves the production API and built frontend
 ```
 
-Deploy production behind HTTPS, forwarding the original Host header. Cookies are HttpOnly, SameSite=Strict, and Secure in production. `PORT` defaults to 3000. `ENG_DATABASE` can select another SQLite path for each process/command. Keep the database and backups private; do not expose them through a web server.
+`npm start` works without Unix-specific environment syntax. Deploy behind HTTPS with the original Host header forwarded: production cookies are Secure, HttpOnly, and SameSite=Strict. `PORT` defaults to 3000. Keep database and backups private. Stop/restart Node after changing database configuration.
 
-## Existing databases
+## Database map
 
-The default database remains `data/eng-roofing.sqlite`; records survive reloads/restarts. Startup preserves existing business records, adds account/session fields, and links legacy bookings only to an unambiguous **existing Client account** with the same email. Unmatched guest bookings remain visible to Admin. Admin can link these legacy bookings to the correct Client account through booking review; never claim them just by registering an email address.
+| Area                     | Tables / relationships                                                                                               |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------- |
+| Accounts and roles       | `users`; Client, Employee, Foreman, Admin are roles of real users                                                    |
+| Authentication           | `sessions` → users, `login_attempts`                                                                                 |
+| Bookings and surveys     | `bookings` → client user; `inspections` → booking, Foreman                                                           |
+| Quotations / BOQ         | `quotations` → booking, inspection; `quotation_materials` → quotation, material; saved quantity/unit/price snapshots |
+| Projects and assignments | `projects` → booking, quotation, Foreman; `project_employees` → project, employee                                    |
+| Execution                | `tasks`, `project_progress` → project; progress entries optionally link their actor                                  |
+| Materials                | `materials`, `material_history`; `usage` → project, material                                                         |
+| Attendance               | `attendance` → user, project; `attendance_corrections`                                                               |
+| Payroll                  | `payroll` → user; `payroll_attendance` uniquely links paid attendance; `payroll_adjustments`                         |
+| Payments / history       | `payments` → project; `payment_annotations` retains amendment history                                                |
+| Feedback                 | `feedback` → project, with Admin review fields                                                                       |
+| Communications           | `notifications` → recipient user; `emails` is the existing local outbox                                              |
+| Configuration            | `settings`, `migrations`, `app_state` (transaction lock/revision)                                                    |
 
-Legacy accounts have no login password until initialized: recover Admin with the local command, then use Users to set other account passwords. Legacy broadcast notifications are removed because they have no trustworthy individual recipient. New notifications always have a user ID. Previously issued tracking links now require login and booking ownership; a token alone does not grant access.
+Business fields have individual SQL columns and relationships have foreign keys. JSON is limited to media arrays, facial descriptors, inspection accessory selections, and `_fields` metadata containing **key names**, which preserves absent versus empty legacy fields. `_position` preserves existing ordering. ISO timestamps map to UTC `DATETIME(3)`; dates use `DATE`, booleans use `BOOLEAN`, session expirations remain epoch milliseconds. Numeric columns use `DOUBLE` to preserve the current JavaScript/SQLite numerical behavior; existing domain rounding and financial calculations are unchanged. `server/seed.js` remains a synthetic test fixture and is never loaded by runtime startup.
 
-`server/seed.js` is retained for optional synthetic fixtures. The application does not call it unless explicitly requested through `createStore(path, { sample: true })`, and it only applies to a new database. Tests use isolated databases and synthetic accounts; they do not alter application records.
+## Verify real persistence
+
+1. Log in as Admin and open **Materials → Add Material**. Enter a clearly labeled verification record, price, unit and category, then save.
+2. In phpMyAdmin, select **eng_roofing → materials → Browse**. The new ID/name/price must appear as SQL columns.
+3. Reload the application, edit that material's price, save, and reload phpMyAdmin. Confirm the new price and inspect `material_history` for the old price. Disable the verification material when finished.
+4. Restart Node and check it again. Data is stored in MySQL/MariaDB, not browser localStorage. Client bookings can likewise be checked in `bookings`, notifications in `notifications`, and authenticated sessions in `sessions` (keep session/biometric data private).
+
+Useful read-only SQL in phpMyAdmin:
+
+```sql
+SELECT id, name, price, active FROM materials;
+SELECT materialId, price, newPrice, note FROM material_history ORDER BY _position;
+SELECT id, clientId, status, submitted_at FROM bookings;
+```
+
+### Automated verification
+
+```bash
+npm test
+npm run build
+npm run format:check
+```
+
+Tests require a running real MySQL/MariaDB server and a local test account allowed to create/drop databases. They create randomly named `eng_roofing_test_*` databases and drop only those generated names, never `DB_NAME`. Do not grant those extra privileges to a deployed application account. Tests cover the four roles, ownership, CSRF, authentication/rate limits/session restart, workflow, facial/geolocation calculations, payroll/payment/history, migration fidelity/rollback, and concurrent writes. SQLite exists only as a temporary source fixture in migration tests. A missing database is a test failure, not a silent skip.
 
 ## Workflow
 
@@ -55,9 +156,11 @@ Legacy accounts have no login password until initialized: recover Admin with the
 
 ## Data and security
 
-Entity tables link bookings → inspections → quotations → projects → tasks/usage/attendance/payments/feedback. SQLite foreign keys and normalized quotation-material, employee-assignment, and payroll-attendance links preserve relationships. Prepared statements and atomic transactions protect saves. Server authorization applies to every action and read endpoint; user IDs or tracking URLs cannot bypass ownership. Passwords use salted scrypt hashes; random session tokens are stored only as hashes, expire after 12 hours, and are revoked by logout or account/credential changes. Mutations validate request origin and session CSRF tokens. Authentication attempts are limited by account/IP and IP totals.
+Prepared statements and InnoDB transactions protect writes. Each mutation acquires an `app_state` row lock before reading the current state, so multiple Node processes cannot lose updates, double-process payroll, or overpay through stale snapshots. Only changed rows and affected relationship collections are written; entity history is not bulk-deleted. Separate snapshot reads remain consistent. This intentionally preserves the existing state-based domain architecture; very large installations may later need paginated reads and finer-grained transaction boundaries.
 
-Dashboards calculate statistics from authorized database records and refresh every 30 seconds. Primary UI branding uses red; success, warning, and information states retain semantic colors.
+Server authorization applies to every action and read endpoint. Mutations recheck the session and live account inside their transaction. Changing a URL, user ID or tracking token cannot bypass ownership. Passwords retain salted scrypt hashes; session tokens are stored as hashes, expire after 12 hours, and are revoked by logout or credential/account changes. Origin and CSRF checks remain active. Authentication limits are persisted and updated atomically. Database credentials are never included in frontend state.
+
+Dashboards calculate from authorized database records and refresh every 30 seconds. Primary branding remains red; semantic status colors are preserved.
 
 ## Operational limits
 
