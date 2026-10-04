@@ -1,5 +1,5 @@
 import mysql from "mysql2/promise";
-import { readFile } from "node:fs/promises";
+export { initializeSchema, checkSchema } from "./database-schema.js";
 try {
   process.loadEnvFile();
 } catch (error) {
@@ -41,16 +41,4 @@ export function createPool(overrides) {
     );
   });
   return pool;
-}
-export async function initializeSchema(pool) {
-  const sql = await readFile(
-    new URL("../database/schema.sql", import.meta.url),
-    "utf8",
-  );
-  // The checked-in schema deliberately contains no routines or delimiter changes.
-  for (const statement of sql
-    .split(";")
-    .map((s) => s.trim())
-    .filter(Boolean))
-    await pool.query(statement);
 }

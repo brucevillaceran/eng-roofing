@@ -1,3 +1,5 @@
+-- Existing installations: prefer npm run db:init to also normalize legacy table casing.
+-- Do not import over a case-sensitive mixed-case archive, use the initializer instead.
 -- ENG Roofing relational schema. Select/create your database before importing.
 -- Non-destructive: existing tables and records are never dropped.
 -- DOUBLE preserves the existing JavaScript numeric calculations and SQLite REAL values.
@@ -387,7 +389,7 @@ INSERT INTO app_state (id, revision) VALUES (1, 0) ON DUPLICATE KEY UPDATE id=id
 
 -- Retired account-level payroll fields, never exposed in API state.
 -- Attendance, payslips, and their financial snapshots remain in their original tables.
-CREATE TABLE IF NOT EXISTS `userPayrollArchive` (
+CREATE TABLE IF NOT EXISTS `userpayrollarchive` (
   id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin PRIMARY KEY,
   _position INT NOT NULL,
   userId VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
