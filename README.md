@@ -2,9 +2,9 @@
 
 **Integrated Payroll System and Roofing Project Management System with Client Feedback Analysis**
 
-A persistent, responsive prototype for ENG Roofing Supply & Installation Services. React + Vite, Express, Node SQLite, Recharts, and face-api.js descriptors.
+React + Vite, Express, Node SQLite, Recharts, and face-api.js. The existing booking, inspection, quotation, project, attendance, payroll, payment, and feedback modules share a persistent database with authenticated user portals.
 
-## Run
+## Run and create the first administrator
 
 Requires Node 24+ and npm.
 
@@ -13,43 +13,57 @@ npm ci
 npm run dev
 ```
 
-Open **http://localhost:3000** for the Admin workspace. Public pages: `/home`, `/book`, `/track`. The role selector at the top right switches between Admin, Foreman, Employee, and Client demonstration identities.
+Open **http://localhost:3000**. Public information is at `/home`; `/login` opens authentication. Clients can register; staff accounts are created by Admin. There are exactly four roles: **Admin, Foreman, Employee, Client**.
+
+A new database starts with company settings and **no sample users, materials, or business records**. Create the first Admin through the local operator command. Use a private file containing a password of 12–128 characters, then remove that file:
 
 ```bash
-npm test       # Workflow and persistence tests
-npm run build # Production bundle
-npm start     # Serve the production bundle on port 3000
+npm run admin -- "your-admin@example.com" "Your name" < /path/to/private/password-file
 ```
 
-SQLite is automatically seeded on first startup at `data/eng-roofing.sqlite` (ignored by Git). Changes survive reloads and restarts. Stop the server and delete the task-local `data/` directory to restore sample data.
+The same command can recover an existing Admin account, invalidating its previous sessions. It cannot promote another role. Credentials are never hardcoded. Admin can create users, set/reset initial passwords, assign valid roles, activate/deactivate accounts, and enroll field personnel. Changing a role with existing linked business records is rejected to preserve record ownership; create a separate account when needed. The last usable Admin cannot be deactivated or demoted.
 
-## Connected demonstration
+```bash
+npm test       # Workflow, persistence, and multi-user HTTP/security tests
+npm run build # Production bundle
+npm start     # Production server; HTTPS is required for secure cookies
+```
 
-1. Open `/book`. Submit a guest roofing request. Save the reference and private tracking link.
-2. In **Admin → Bookings**, review the request and choose **For Inspection**, an inspector, and date. Exact submission timestamps establish ordering for conflicting schedules.
-3. Switch to **Foreman → Site Inspections**. Complete measurements, condition, roof profile, accessories, photos, and notes.
-4. Select **Prepare estimate**, choose catalog materials and quantities, and submit for review. Previous material records are available as reference only.
-5. Switch to **Admin → Quotations**. Review quantities and charges, set the requested downpayment, and finalize. Prices are snapshots and cannot silently change with the catalog.
-6. Open the guest tracking link (also in **Notifications → Email preview**) and approve. A project/job order and planned material records are created automatically.
-7. In **Admin → Projects**, open the new project and **Manage project**. Assign foreman/employees and dates. Record the requested downpayment in **Payments** before changing status to Ongoing.
-8. As the assigned Foreman, open the project to add tasks, record progress, and update material delivery/usage. Task assignees must belong to the project.
-9. **Admin → Users → Enroll** starts supervised camera enrollment for personnel. Switch to the enrolled worker, then **Attendance → Verify & record attendance**. Grant camera/location permissions. The second verification checks out. The system chooses the earliest-starting ongoing assignment that includes today; the employee never selects a project.
-10. **Admin → Payroll** calculates pay from completed, verified attendance. The seed has October 2 sample attendance for Pedro Santos and Mark Reyes to demonstrate a full workday. Rates are configurable; hours are capped at eight per day; deductions are entered explicitly. Overlapping payroll periods are rejected.
-11. Complete required tasks and confirm the final inspection/project requirements, then complete the project. Record any remaining balance. Completed work is preserved; the fully paid record becomes locked.
-12. Completion generates a feedback link in the email preview inbox. Submit the four numerical ratings through guest tracking and view **Feedback Analysis** for averages, strongest/weakest categories, radar chart, and comments.
+Deploy production behind HTTPS, forwarding the original Host header. Cookies are HttpOnly, SameSite=Strict, and Secure in production. `PORT` defaults to 3000. `ENG_DATABASE` can select another SQLite path for each process/command. Keep the database and backups private; do not expose them through a web server.
 
-## Data and rules
+## Existing databases
 
-Entity tables link bookings → inspections → quotations → projects → tasks/usage/attendance/payments/feedback. SQLite foreign keys enforce entity relationships; `quotation_materials`, `project_employees`, and `payroll_attendance` preserve normalized links. JSON columns hold flexible inspection details and project timelines. Saves are atomic transactions. Failed actions are never committed.
+The default database remains `data/eng-roofing.sqlite`; records survive reloads/restarts. Startup preserves existing business records, adds account/session fields, and links legacy bookings only to an unambiguous **existing Client account** with the same email. Unmatched guest bookings remain visible to Admin. Admin can link these legacy bookings to the correct Client account through booking review; never claim them just by registering an email address.
 
-Catalog prices are editable **sample/default prototype prices**, not official ENG Roofing prices. Historical quotation and payroll rates are retained.
+Legacy accounts have no login password until initialized: recover Admin with the local command, then use Users to set other account passwords. Legacy broadcast notifications are removed because they have no trustworthy individual recipient. New notifications always have a user ID. Previously issued tracking links now require login and booking ownership; a token alone does not grant access.
 
-## Prototype boundaries
+`server/seed.js` is retained for optional synthetic fixtures. The application does not call it unless explicitly requested through `createStore(path, { sample: true })`, and it only applies to a new database. Tests use isolated databases and synthetic accounts; they do not alter application records.
 
-- The role selector is an explicit demo mechanism, **not authentication**. Do not expose this app with real customer or biometric data. Account registration, secure sessions, and production authorization are not implemented.
-- Emails are stored in the **local email preview inbox**, including clickable tracking/quotation/feedback links. External email delivery is not configured or claimed.
-- Face-api models are bundled locally. Real camera capture, descriptor comparison, and location recording are implemented. This is **geotagging**, not geofencing. Physical device verification needs a secure context (localhost or HTTPS), supported hardware, and granted permissions. There is no liveness/anti-spoofing detection.
-- Location and descriptors are synthetic/demo-local data; no biometric provider is called. Enrollment should use consenting test participants only.
-- Payroll demonstrates daily rate prorated by verified hours, with manually approved deductions. No overtime, tax, statutory deductions, or task-based compensation is assumed.
-- Preferred booking time and estimated completion are scheduling information; real availability is reviewed by Admin.
-- Face-api model files are distributed by `@vladmandic/face-api` under its MIT license. See `public/models/LICENSE`.
+## Workflow
+
+1. Client registers/signs in and submits a booking. Admin can also create one for an existing active Client account.
+2. Admin approves/rejects bookings or schedules an inspection with an active Foreman. Client and assigned Foreman receive individual notifications.
+3. Assigned Foreman or Admin records the inspection. Internal survey notes remain private; published client results appear in the Client portal.
+4. Admin maintains actual catalog materials/prices. Foreman prepares an estimate from a completed assigned inspection; Admin reviews BOQ quantities/charges, sets downpayment, and sends the quotation.
+5. The owning Client approves/rejects the quotation. Approval creates the project/job order and planned material usage. Admin is notified.
+6. Admin assigns Foreman and Employees, confirms dates, and records the requested downpayment before starting work.
+7. Assigned Foreman manages tasks, task status, overall progress/site updates, and material delivery/usage. Client and Admin receive progress notifications. Employees see only their assigned projects/tasks.
+8. Admin supervises face enrollment. Employees/Foremen record attendance using camera descriptors and location. The server selects an ongoing assignment covering today; check-out completes the workday.
+9. Admin processes payroll from completed verified attendance. Rate snapshots, deductions, and release timestamps are retained. Overlapping periods are rejected. Employees see only their own payroll and release information.
+10. Complete required tasks and confirm final inspection/project requirements before completion. Record outstanding payments. Fully paid completed projects lock; historical financial and attendance records are preserved.
+11. Owning Client submits completion feedback and sees its history. Admin sees analysis, reviews feedback, monitors system statistics, and can send individual notifications.
+
+## Data and security
+
+Entity tables link bookings → inspections → quotations → projects → tasks/usage/attendance/payments/feedback. SQLite foreign keys and normalized quotation-material, employee-assignment, and payroll-attendance links preserve relationships. Prepared statements and atomic transactions protect saves. Server authorization applies to every action and read endpoint; user IDs or tracking URLs cannot bypass ownership. Passwords use salted scrypt hashes; random session tokens are stored only as hashes, expire after 12 hours, and are revoked by logout or account/credential changes. Mutations validate request origin and session CSRF tokens. Authentication attempts are limited by account/IP and IP totals.
+
+Dashboards calculate statistics from authorized database records and refresh every 30 seconds. Primary UI branding uses red; success, warning, and information states retain semantic colors.
+
+## Operational limits
+
+- In-app notifications work without an email provider. Email messages are persisted in the Admin email outbox; external email delivery is not configured.
+- Camera/location need HTTPS (or localhost), supported hardware, and permissions. Face descriptor comparison and geotagging are preserved; there is no liveness detection or geofencing. Enroll consenting personnel and apply appropriate biometric data handling policies.
+- Payroll prorates daily rates by verified hours capped at eight per day. Overtime, taxes, and statutory deductions are not automated; enter approved deductions. Admin corrections are allowed before payroll processing/release; paid records remain preserved.
+- Material prices must be entered by Admin; seed prices are synthetic fixtures. Historical quotations retain their original prices.
+- Booking preferences and completion estimates require Admin scheduling review.
+- Bundled face-api model files use the MIT license; see `public/models/LICENSE`.

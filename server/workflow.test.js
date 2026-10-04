@@ -1,8 +1,46 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { seed } from "./seed.js";
-import { apply, balance } from "./domain.js";
+import { apply as domainApply, balance } from "./domain.js";
 import { createStore } from "./store.js";
+// Fixtures remain optional sample data; workflow actions now use actual client identities.
+function apply(s, action, data, actor) {
+  for (const b of s.bookings) {
+    if (!b.clientId) {
+      let u = s.users.find((u) => u.role === "Client" && u.email === b.email);
+      if (!u) {
+        u = {
+          id: `fixture-${b.id}`,
+          name: b.name,
+          email: b.email,
+          role: "Client",
+          active: true,
+        };
+        s.users.push(u);
+      }
+      b.clientId = u.id;
+    }
+  }
+  if (!actor) {
+    const b = s.bookings.find((b) => b.token === data.token);
+    let client = b && s.users.find((u) => u.id === b.clientId);
+    if (!client) {
+      client = s.users.find((u) => u.id === "fixture-client");
+      if (!client) {
+        client = {
+          id: "fixture-client",
+          name: "Test Roofing Client",
+          email: "synthetic@example.test",
+          role: "Client",
+          active: true,
+        };
+        s.users.push(client);
+      }
+    }
+    actor = client;
+  }
+  return domainApply(s, action, data, actor);
+}
 const admin = { id: "USR-1", role: "Admin" },
   foreman = { id: "USR-2", role: "Foreman" },
   employee = { id: "USR-3", role: "Employee" };
@@ -193,7 +231,7 @@ test("prices are snapshots; admin changes quantities without replacing saved pri
   assert.equal(s.materials[1].history.length, 1);
   assert.throws(() => apply(s, "finalize", { id: q.id }, foreman), /role/);
 });
-test("guest cannot approve another booking quotation", () => {
+test("client cannot approve a quotation using a different booking", () => {
   const s = seed(),
     { b, q } = estimate(s),
     other = apply(s, "book", booking());
@@ -389,7 +427,7 @@ test("payroll uses only completed verified attendance, prevents overlap and reta
   );
 });
 test("SQLite round trip and atomic transaction rollback", () => {
-  const store = createStore(":memory:"),
+  const store = createStore(":memory:", { sample: true }),
     s = store.read();
   const b = apply(s, "book", booking());
   store.save(s);
@@ -401,7 +439,7 @@ test("SQLite round trip and atomic transaction rollback", () => {
   store.close();
 });
 test("database foreign keys reject orphan relationships", () => {
-  const store = createStore(":memory:"),
+  const store = createStore(":memory:", { sample: true }),
     s = store.read();
   s.projects[0].quotationId = "MISSING";
   assert.throws(() => store.save(s), /FOREIGN KEY/);

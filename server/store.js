@@ -1,5 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
+import { dirname } from "node:path";
 import { seed } from "./seed.js";
 const tables = [
   "users",
@@ -19,6 +20,7 @@ const tables = [
   "settings",
 ];
 const references = {
+  bookings: { clientId: "users" },
   inspections: { bookingId: "bookings", foremanId: "users" },
   quotations: { bookingId: "bookings", inspectionId: "inspections" },
   projects: {
@@ -33,8 +35,11 @@ const references = {
   payments: { projectId: "projects" },
   feedback: { projectId: "projects" },
 };
-export function createStore(path = "data/eng-roofing.sqlite") {
-  if (path !== ":memory:") mkdirSync("data", { recursive: true });
+export function createStore(
+  path = "data/eng-roofing.sqlite",
+  { sample = false } = {},
+) {
+  if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
   const db = new DatabaseSync(path);
   db.exec("PRAGMA journal_mode=WAL;");
   for (const t of tables)
@@ -100,7 +105,51 @@ export function createStore(path = "data/eng-roofing.sqlite") {
       throw e;
     }
   };
-  if (!db.prepare("SELECT id FROM settings LIMIT 1").get()) save(seed());
-  else save(read());
-  return { read, save, close: () => db.close() };
+  db.exec(`CREATE TABLE IF NOT EXISTS sessions (tokenHash TEXT PRIMARY KEY, userId TEXT NOT NULL, csrf TEXT NOT NULL, version INTEGER NOT NULL, expires INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS login_attempts (key TEXT PRIMARY KEY, count INTEGER NOT NULL, expires INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS migrations (id TEXT PRIMARY KEY);`);
+  if (!db.prepare("SELECT id FROM settings LIMIT 1").get()) {
+    const existing = read();
+    const initial =
+      sample && tables.every((t) => existing[t].length === 0)
+        ? seed()
+        : existing;
+    if (!initial.settings.length)
+      initial.settings = [
+        {
+          id: "company",
+          name: "ENG Roofing Supply & Installation Services",
+          hoursPerDay: 8,
+          currency: "PHP",
+          payrollNote:
+            "Daily rate prorated by verified hours, capped at eight hours per day. Enter approved deductions.",
+        },
+      ];
+    save(initial);
+  }
+  // Link legacy bookings only to existing, unambiguous client accounts.
+  const current = read();
+  for (const u of current.users) {
+    u.active ??= true;
+    u.sessionVersion ??= 0;
+  }
+  const migrateOwnership = !db
+    .prepare("SELECT id FROM migrations WHERE id=?")
+    .get("account-ownership-v1");
+  for (const b of migrateOwnership ? current.bookings : []) {
+    if (!b.clientId) {
+      const matches = current.users.filter(
+        (u) =>
+          u.role === "Client" &&
+          u.email.toLowerCase() === b.email.toLowerCase(),
+      );
+      if (matches.length === 1) b.clientId = matches[0].id;
+    }
+  }
+  // Legacy broadcast notifications have no trustworthy private recipient.
+  current.notifications = current.notifications.filter((n) => n.userId);
+  save(current);
+  if (migrateOwnership)
+    db.prepare("INSERT INTO migrations VALUES(?)").run("account-ownership-v1");
+  return { read, save, db, close: () => db.close() };
 }
