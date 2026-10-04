@@ -1,3 +1,4 @@
+import { emailAddress, validateAuth } from "../shared/validation.js";
 import { models, decode } from "./database-model.js";
 import {
   randomBytes,
@@ -7,15 +8,7 @@ import {
   createHash,
 } from "node:crypto";
 export const roles = ["Admin", "Foreman", "Employee", "Client"];
-export function validEmail(value) {
-  if (
-    typeof value !== "string" ||
-    !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value) ||
-    value.length > 254
-  )
-    throw new Error("Enter a valid email address.");
-  return value.trim().toLowerCase();
-}
+export const validEmail = emailAddress;
 export function hashPassword(password) {
   if (
     typeof password !== "string" ||
@@ -40,7 +33,17 @@ export const safeUser = ({
   descriptor,
   sessionVersion,
   ...user
-}) => ({ ...user, enrolled: !!descriptor });
+}) => {
+  if (user.role !== "Employee") delete user.rate;
+  return {
+    ...user,
+    enrolled:
+      user.role === "Employee" &&
+      Array.isArray(descriptor) &&
+      descriptor.length === 128 &&
+      descriptor.every((n) => Number.isFinite(n) && Math.abs(n) <= 2),
+  };
+};
 const digest = (value) => createHash("sha256").update(value).digest("hex");
 const dummyHash = hashPassword(randomBytes(24).toString("hex"));
 export async function authorizeSession(connection, req, state) {
@@ -199,6 +202,11 @@ export function configureAuth(app, store) {
   );
   app.post("/api/auth/login", async (req, res) => {
     if (!(await limited(req, res))) return;
+    try {
+      req.body = validateAuth("login", req.body);
+    } catch (error) {
+      return res.status(400).json({ error: error.message, field: error.field });
+    }
     const session = await store.transaction(async (s, connection) => {
       const user = s.users.find(
         (u) =>
@@ -229,6 +237,7 @@ export function configureAuth(app, store) {
   app.post("/api/auth/register", async (req, res) => {
     if (!(await limited(req, res))) return;
     try {
+      req.body = validateAuth("register", req.body);
       const email = validEmail(req.body.email),
         passwordHash = hashPassword(req.body.password);
       if (
@@ -247,12 +256,11 @@ export function configureAuth(app, store) {
             id: `USR-${randomUUID()}`,
             name: req.body.name.trim(),
             email,
-            contact: String(req.body.contact || "").slice(0, 100),
+            contact: req.body.contact,
             role: "Client",
             active: true,
             passwordHash,
             sessionVersion: 0,
-            rate: 0,
             photo: "",
           };
           s.users.push(user);
@@ -264,6 +272,7 @@ export function configureAuth(app, store) {
     } catch (error) {
       res.status(error.code ? 500 : 400).json({
         error: error.code ? "Account could not be saved." : error.message,
+        field: error.field,
       });
     }
   });

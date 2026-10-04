@@ -3271,3 +3271,12 @@ small,
   background: #fee2e2;
   border-color: #fecaca;
 }
+
+.field-error {
+  color: #b91c1c;
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+.field [aria-invalid="true"] {
+  border-color: #b91c1c;
+}

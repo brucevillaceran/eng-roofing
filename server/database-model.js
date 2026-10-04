@@ -39,6 +39,8 @@ export const models = Object.fromEntries(
       "userId:ref-users role:role title message createdAt:instant read:bool",
     emails: "to subject message path createdAt:instant status",
     settings: "name hoursPerDay:number currency payrollNote",
+    userPayrollArchive:
+      "userId:ref-users role:role rate:number descriptor:json archivedAt:instant",
   }).map(([table, def]) => [table, fields(def)]),
 );
 export const children = [

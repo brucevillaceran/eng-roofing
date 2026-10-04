@@ -1,3 +1,4 @@
+import { identifier, ValidationError } from "../shared/validation.js";
 import express from "express";
 import { apply, balance } from "./domain.js";
 import { configureAuth, authenticated, authorizeSession } from "./auth.js";
@@ -38,6 +39,7 @@ export function createApi(store) {
     res.json(visibleState(await readAuthorized(req), req.user)),
   );
   app.get("/api/track/:token", authenticated, async (req, res) => {
+    identifier(req.params.token, "Tracking token", 128);
     const s = visibleState(await readAuthorized(req), req.user),
       b = s.bookings.find((b) => b.token === req.params.token);
     if (!b || !["Admin", "Client"].includes(req.user.role))
@@ -63,6 +65,7 @@ export function createApi(store) {
     });
   });
   app.get("/api/personnel/:id", authenticated, async (req, res) => {
+    identifier(req.params.id, "Personnel ID");
     const u = visibleState(await readAuthorized(req), req.user).users.find(
       (u) => u.id === req.params.id && u.role === "Foreman",
     );
@@ -86,6 +89,7 @@ export function createApi(store) {
       res.json(result);
     } catch (e) {
       res.status(e.status || (e.code ? 500 : 400)).json({
+        field: e.field,
         error: e.code
           ? "Database operation failed; no changes were saved."
           : e.message,
@@ -98,9 +102,11 @@ export function createApi(store) {
   app.use((err, req, res, next) =>
     res.status(err.status || 500).json({
       error:
-        err.type === "entity.too.large"
-          ? "Request is too large."
-          : "Request could not be processed.",
+        err instanceof ValidationError
+          ? err.message
+          : err.type === "entity.too.large"
+            ? "Request is too large."
+            : "Request could not be processed.",
     }),
   );
   return app;
