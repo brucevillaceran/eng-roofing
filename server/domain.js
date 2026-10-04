@@ -1,0 +1,816 @@
+import { randomUUID } from "node:crypto";
+export const services = [
+  "Roof Installation",
+  "Roof Replacement",
+  "Roof Repair",
+];
+export const types = [
+  "Residential",
+  "Commercial",
+  "Industrial",
+  "Institutional",
+];
+const now = () => new Date().toISOString();
+const id = (prefix) => `${prefix}-${randomUUID().slice(0, 8).toUpperCase()}`;
+const fail = (message) => {
+  throw new Error(message);
+};
+const need = (condition, message) => {
+  if (!condition) fail(message);
+};
+const num = (v, label, min = 0) => {
+  const n = Number(v);
+  need(Number.isFinite(n) && n >= min, `${label} must be at least ${min}.`);
+  return n;
+};
+const money = (n) => Math.round(n * 100) / 100;
+const date = (v, label) => {
+  need(
+    /^\d{4}-\d{2}-\d{2}$/.test(v || "") &&
+      !isNaN(Date.parse(v)) &&
+      new Date(v).toISOString().slice(0, 10) === v,
+    `${label} is required.`,
+  );
+  return v;
+};
+const text = (v, label) => {
+  need(typeof v === "string" && v.trim().length > 0, `${label} is required.`);
+  return v.trim();
+};
+export const balance = (s, p) =>
+  money(
+    s.quotations.find((q) => q.id === p.quotationId).total -
+      s.payments
+        .filter((x) => x.projectId === p.id)
+        .reduce((a, x) => a + x.amount, 0),
+  );
+export function apply(s, action, d, actor = { role: "Guest" }) {
+  const permit = (...roles) =>
+    need(
+      roles.includes(actor.role),
+      "This action is unavailable for your role.",
+    );
+  const get = (table, key) =>
+    s[table].find((x) => x.id === key) || fail(`${table} record not found.`);
+  const project = (key, allowCompleted = false) => {
+    const p = get("projects", key);
+    need(!p.locked, "This completed and fully paid project is locked.");
+    need(
+      allowCompleted || p.status !== "Completed",
+      "Completed project work is preserved; only remaining payments can be recorded.",
+    );
+    if (actor.role === "Foreman")
+      need(
+        p.foremanId === actor.id,
+        "This project is assigned to another foreman.",
+      );
+    return p;
+  };
+  const notify = (role, title, message) =>
+    s.notifications.unshift({
+      id: id("NT"),
+      role,
+      title,
+      message,
+      createdAt: now(),
+      read: false,
+    });
+  const email = (b, subject, message, path) =>
+    s.emails.unshift({
+      id: id("MAIL"),
+      to: b.email,
+      subject,
+      message,
+      path,
+      createdAt: now(),
+      status: "Local preview",
+    });
+  const event = (p, message) => {
+    p.timeline.push({ text: message, at: now() });
+    notify("Admin", "Project update", `${p.name}: ${message}`);
+    notify("Client", "Project update", `${p.name}: ${message}`);
+    const b = get("bookings", p.bookingId);
+    email(
+      b,
+      "Roofing project update",
+      `${p.name}: ${message}`,
+      `/track/${b.token}`,
+    );
+  };
+  const tracking = (b) => `/track/${b.token}`;
+  const clientBooking = () => {
+    const b = s.bookings.find((x) => x.token === d.token);
+    need(b, "Tracking link is invalid.");
+    return b;
+  };
+  let result;
+  switch (action) {
+    case "book": {
+      const name = text(d.name, "Full name"),
+        emailAddress = text(d.email, "Email");
+      need(
+        /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailAddress),
+        "Enter a valid email address.",
+      );
+      need(
+        services.includes(d.service) && types.includes(d.type),
+        "Choose a roofing service and project type.",
+      );
+      const b = {
+        id: id("BK"),
+        name,
+        email: emailAddress,
+        phone: text(d.phone, "Contact number"),
+        address: text(d.address, "Address"),
+        date: date(d.date, "Preferred date"),
+        time: text(d.time, "Preferred time"),
+        service: d.service,
+        type: d.type,
+        description: text(d.description, "Roofing concern"),
+        photos: Array.isArray(d.photos) ? d.photos.slice(0, 5) : [],
+        status: "Pending",
+        submitted_at: now(),
+        token: randomUUID(),
+      };
+      need(
+        b.date >= now().slice(0, 10),
+        "Preferred date cannot be in the past.",
+      );
+      s.bookings.push(b);
+      email(
+        b,
+        "Your roofing booking is confirmed",
+        `Thank you, ${b.name}. Your reference is ${b.id}. We will review your preferred schedule.`,
+        tracking(b),
+      );
+      notify(
+        "Admin",
+        "New roofing booking",
+        `${b.name} requested ${b.service.toLowerCase()}.`,
+      );
+      result = { id: b.id, token: b.token, submitted_at: b.submitted_at };
+      break;
+    }
+    case "booking": {
+      permit("Admin");
+      const b = get("bookings", d.id);
+      need(
+        !s.quotations.some((q) => q.bookingId === b.id),
+        "A quotation exists; booking details are preserved.",
+      );
+      need(
+        [
+          "Pending",
+          "Approved",
+          "Rejected",
+          "Rescheduled",
+          "For Inspection",
+          "Completed",
+          "Cancelled",
+        ].includes(d.status),
+        "Invalid booking status.",
+      );
+      Object.assign(b, {
+        name: text(d.name || b.name, "Name"),
+        phone: d.phone || b.phone,
+        address: text(d.address || b.address, "Address"),
+        description: d.description ?? b.description,
+        status: d.status,
+        date: date(d.date || b.date, "Preferred date"),
+        time: d.time || b.time,
+      });
+      if (d.status === "For Inspection") {
+        need(get("users", d.foremanId).role === "Foreman", "Assign a foreman.");
+        const existing = s.inspections.find((i) => i.bookingId === b.id);
+        const values = {
+          bookingId: b.id,
+          foremanId: d.foremanId,
+          date: date(d.inspectionDate || b.date, "Inspection date"),
+          status: "Scheduled",
+        };
+        if (existing) Object.assign(existing, values);
+        else
+          s.inspections.push({
+            id: id("IN"),
+            ...values,
+            area: 0,
+            linear: 0,
+            profile: "Not Determined",
+            complexity: "Simple",
+            sections: 1,
+            condition: "Requires Further Assessment",
+            accessories: [],
+            notes: "",
+            photos: [],
+          });
+        notify("Foreman", "Inspection assigned", `${b.name} · ${b.date}`);
+      }
+      email(
+        b,
+        "Booking update",
+        `Your booking ${b.id} is ${b.status.toLowerCase()}. Preferred schedule: ${b.date} at ${b.time}.`,
+        tracking(b),
+      );
+      break;
+    }
+    case "inspection": {
+      permit("Foreman", "Admin");
+      const i = get("inspections", d.id);
+      if (actor.role === "Foreman")
+        need(
+          i.foremanId === actor.id,
+          "Inspection is assigned to another foreman.",
+        );
+      need(
+        !s.quotations.some((q) => q.inspectionId === i.id),
+        "Inspection is preserved after an estimate is created.",
+      );
+      const sections = num(d.sections, "Roof sections", 1);
+      need(Number.isInteger(sections), "Roof sections must be a whole number.");
+      Object.assign(i, {
+        area: num(d.area, "Roof area", 0.01),
+        linear: num(d.linear, "Linear measurement"),
+        sections,
+        profile: text(d.profile, "Roof profile"),
+        complexity: d.complexity,
+        condition: text(d.condition, "Condition"),
+        accessories: d.accessories || [],
+        notes: d.notes || "",
+        photos: d.photos || [],
+        date: date(d.date, "Inspection date"),
+        status: "Completed",
+      });
+      break;
+    }
+    case "estimate": {
+      permit("Foreman", "Admin");
+      const i = get("inspections", d.inspectionId);
+      need(i.status === "Completed", "Complete the site inspection first.");
+      if (actor.role === "Foreman")
+        need(
+          i.foremanId === actor.id,
+          "Inspection is assigned to another foreman.",
+        );
+      need(
+        !s.quotations.some((q) => q.inspectionId === i.id),
+        "An estimate already exists for this inspection.",
+      );
+      need(d.items?.length, "Select at least one material.");
+      need(
+        new Set(d.items.map((x) => x.materialId)).size === d.items.length,
+        "A material may appear only once.",
+      );
+      const items = d.items.map((x) => {
+        const m = get("materials", x.materialId);
+        need(m.active, "Disabled materials cannot be selected.");
+        return {
+          materialId: m.id,
+          name: m.name,
+          unit: m.unit,
+          quantity: num(x.quantity, "Quantity", 0.01),
+          price: m.price,
+        };
+      });
+      const charges = num(d.charges || 0, "Additional charges"),
+        total = money(
+          items.reduce((a, x) => a + x.quantity * x.price, 0) + charges,
+        );
+      const q = {
+        id: id("QT"),
+        bookingId: i.bookingId,
+        inspectionId: i.id,
+        items,
+        charges,
+        total,
+        downpayment: money(total * 0.3),
+        status: "Initial Estimate",
+        notes: d.notes || "",
+        createdAt: now(),
+      };
+      s.quotations.push(q);
+      notify(
+        "Admin",
+        "Initial estimate submitted",
+        `${q.id} is ready for review.`,
+      );
+      break;
+    }
+    case "finalize": {
+      permit("Admin");
+      const q = get("quotations", d.id);
+      need(
+        ["Initial Estimate", "Under Review"].includes(q.status),
+        "Only an initial estimate can be finalized.",
+      );
+      if (d.items) {
+        need(d.items.length, "Select at least one material.");
+        need(
+          new Set(d.items.map((x) => x.materialId)).size === d.items.length,
+          "A material may appear only once.",
+        );
+        q.items = d.items.map((x) => {
+          const old = q.items.find((o) => o.materialId === x.materialId),
+            m = get("materials", x.materialId);
+          need(old || m.active, "Disabled materials cannot be selected.");
+          return {
+            materialId: m.id,
+            name: old?.name || m.name,
+            unit: old?.unit || m.unit,
+            quantity: num(x.quantity, "Quantity", 0.01),
+            price: old?.price ?? m.price,
+          };
+        });
+      }
+      q.charges = num(d.charges ?? q.charges, "Additional charges");
+      q.total = money(
+        q.items.reduce((a, x) => a + x.quantity * x.price, 0) + q.charges,
+      );
+      q.downpayment = money(num(d.downpayment ?? q.total * 0.3, "Downpayment"));
+      need(q.downpayment <= q.total, "Downpayment cannot exceed total.");
+      q.notes = d.notes ?? q.notes;
+      q.status = "Awaiting Client";
+      const b = get("bookings", q.bookingId);
+      email(
+        b,
+        "Your final roofing quotation is ready",
+        `Review quotation ${q.id} and approve or reject it using your tracking link.`,
+        tracking(b),
+      );
+      notify(
+        "Client",
+        "Quotation available",
+        `${q.id} is ready for your review.`,
+      );
+      break;
+    }
+    case "quoteDecision": {
+      const b = clientBooking(),
+        q = get("quotations", d.id);
+      need(
+        q.bookingId === b.id && q.status === "Awaiting Client",
+        "Quotation is not awaiting your decision.",
+      );
+      need(["Approved", "Rejected"].includes(d.status), "Invalid decision.");
+      q.status = d.status;
+      notify(
+        "Admin",
+        `Quotation ${d.status.toLowerCase()}`,
+        `${b.name} · ${q.id}`,
+      );
+      if (d.status === "Approved") {
+        const p = {
+          id: id("PRJ"),
+          bookingId: b.id,
+          quotationId: q.id,
+          name:
+            d.name ||
+            `${b.name.split(" ").slice(-1)} ${b.type === "Residential" ? "Residence" : "Roofing Project"}`,
+          client: b.name,
+          service: b.service,
+          type: b.type,
+          address: b.address,
+          status: "Pending",
+          progress: 0,
+          start: "",
+          end: "",
+          foremanId: "",
+          employeeIds: [],
+          requirements: false,
+          locked: false,
+          createdAt: now(),
+          timeline: [
+            {
+              text: "Client approved quotation · job order created",
+              at: now(),
+            },
+          ],
+        };
+        s.projects.push(p);
+        q.items.forEach((x) =>
+          s.usage.push({
+            id: id("USE"),
+            projectId: p.id,
+            materialId: x.materialId,
+            used: 0,
+            delivered: 0,
+          }),
+        );
+        b.status = "Completed";
+        email(
+          b,
+          "Your roofing project is approved",
+          `Job order ${p.id} has been created. Our team will confirm your schedule.`,
+          tracking(b),
+        );
+        result = p;
+      }
+      break;
+    }
+    case "project": {
+      permit("Admin");
+      const p = project(d.id);
+      need(
+        [
+          "Pending",
+          "Approved",
+          "Scheduled",
+          "Ongoing",
+          "On Hold",
+          "Cancelled",
+        ].includes(d.status),
+        "Use the completion action to complete a project.",
+      );
+      need(
+        !d.foremanId || get("users", d.foremanId).role === "Foreman",
+        "Invalid foreman.",
+      );
+      const employeeIds = d.employeeIds || [];
+      need(
+        employeeIds.every((e) => get("users", e).role === "Employee"),
+        "Invalid employee assignment.",
+      );
+      if (["Scheduled", "Ongoing"].includes(d.status)) {
+        need(
+          d.foremanId && employeeIds.length,
+          "Assign a foreman and at least one employee.",
+        );
+        date(d.start, "Start date");
+        date(d.end, "Estimated completion");
+        need(
+          d.end >= d.start,
+          "Completion estimate must be after the start date.",
+        );
+      }
+      if (d.status === "Ongoing")
+        need(
+          s.quotations.find((q) => q.id === p.quotationId).total -
+            balance(s, p) >=
+            s.quotations.find((q) => q.id === p.quotationId).downpayment,
+          "Record the agreed downpayment before starting work.",
+        );
+      Object.assign(p, {
+        name: text(d.name || p.name, "Project name"),
+        foremanId: d.foremanId || "",
+        employeeIds,
+        start: d.start || "",
+        end: d.end || "",
+        status: d.status,
+      });
+      event(p, `Project ${p.status.toLowerCase()} · personnel updated`);
+      notify(
+        "Employee",
+        "Project assignment",
+        `${p.name} · ${p.start || "Schedule pending"}`,
+      );
+      notify("Foreman", "Project assignment", p.name);
+      break;
+    }
+    case "task": {
+      permit("Foreman", "Admin");
+      const p = project(d.projectId);
+      const assigneeId = text(d.assigneeId, "Assigned personnel");
+      need(
+        [p.foremanId, ...p.employeeIds].includes(assigneeId),
+        "Assign the task to project personnel.",
+      );
+      const t = d.id ? get("tasks", d.id) : { id: id("TSK"), projectId: p.id };
+      need(t.projectId === p.id, "Task does not belong to project.");
+      const progress = num(d.progress, "Progress");
+      need(progress <= 100, "Progress cannot exceed 100%.");
+      const start = date(d.start, "Task start"),
+        due = date(d.due, "Task due date");
+      need(due >= start, "Task due date must follow start.");
+      Object.assign(t, {
+        name: text(d.name, "Task name"),
+        assigneeId,
+        start,
+        due,
+        progress,
+        notes: d.notes || "",
+        required: d.required !== false,
+      });
+      if (!d.id) s.tasks.push(t);
+      const tasks = s.tasks.filter((x) => x.projectId === p.id);
+      p.progress = Math.round(
+        tasks.reduce((a, x) => a + x.progress, 0) / tasks.length,
+      );
+      event(p, `${t.name} · ${progress}% complete`);
+      break;
+    }
+    case "usage": {
+      permit("Foreman", "Admin");
+      const p = project(d.projectId),
+        u = get("usage", d.id);
+      need(u.projectId === p.id, "Material does not belong to project.");
+      const delivered = num(d.delivered, "Delivered quantity"),
+        used = num(d.used, "Used quantity");
+      need(used <= delivered, "Usage cannot exceed delivered material.");
+      Object.assign(u, { used, delivered });
+      event(p, "Material delivery and usage updated");
+      break;
+    }
+    case "payment": {
+      permit("Admin");
+      const p = project(d.projectId, true),
+        amount = money(num(d.amount, "Payment amount", 0.01));
+      need(
+        amount <= balance(s, p),
+        "Payment cannot exceed the remaining balance.",
+      );
+      s.payments.push({
+        id: id("PAY"),
+        projectId: p.id,
+        amount,
+        method: text(d.method, "Payment method"),
+        date: date(d.date, "Payment date"),
+        reference: text(d.reference, "Reference number"),
+        remarks: d.remarks || "",
+        createdAt: now(),
+      });
+      const b = get("bookings", p.bookingId);
+      email(
+        b,
+        "Payment received",
+        `We received ₱${amount.toLocaleString()} for ${p.name}. Remaining balance: ₱${balance(s, p).toLocaleString()}.`,
+        tracking(b),
+      );
+      notify("Admin", "Payment received", p.name);
+      if (p.status === "Completed" && balance(s, p) === 0) p.locked = true;
+      break;
+    }
+    case "complete": {
+      permit("Admin", "Foreman");
+      const p = project(d.id);
+      need(p.status !== "Completed", "Project is already completed.");
+      need(
+        p.foremanId && p.employeeIds.length,
+        "Assign a foreman and employees before completion.",
+      );
+      const tasks = s.tasks.filter((t) => t.projectId === p.id && t.required);
+      need(
+        tasks.length && tasks.every((t) => t.progress === 100),
+        "Complete all required project tasks first.",
+      );
+      need(
+        d.requirements === true,
+        "Confirm the project requirements and final inspection are satisfied.",
+      );
+      p.requirements = true;
+      p.status = "Completed";
+      p.progress = 100;
+      p.locked = balance(s, p) === 0;
+      event(p, "Project completed · final inspection passed");
+      const b = get("bookings", p.bookingId);
+      email(
+        b,
+        "Your roof is complete — share your feedback",
+        `Thank you for choosing ENG Roofing. Please rate installation, service, timeliness, and professionalism.`,
+        `${tracking(b)}?feedback=1`,
+      );
+      break;
+    }
+    case "feedback": {
+      const b = clientBooking(),
+        p = get("projects", d.projectId);
+      need(
+        p.bookingId === b.id && p.status === "Completed",
+        "Feedback is available after project completion.",
+      );
+      need(
+        !s.feedback.some((f) => f.projectId === p.id),
+        "Feedback has already been submitted.",
+      );
+      const f = {
+        id: id("FB"),
+        projectId: p.id,
+        name: b.name,
+        comments: d.comments || "",
+        createdAt: now(),
+      };
+      for (const key of [
+        "installation",
+        "service",
+        "timeliness",
+        "professionalism",
+      ]) {
+        f[key] = num(d[key], key, 1);
+        need(
+          Number.isInteger(f[key]) && f[key] <= 5,
+          "Ratings must be from 1 to 5.",
+        );
+      }
+      s.feedback.push(f);
+      notify("Admin", "Feedback submitted", `${b.name} rated ${p.name}.`);
+      break;
+    }
+    case "material": {
+      permit("Admin");
+      const m = d.id ? get("materials", d.id) : { id: id("MAT"), history: [] };
+      m.history.unshift({
+        at: now(),
+        price: m.price ?? null,
+        unit: m.unit ?? null,
+        name: m.name ?? null,
+        newPrice: num(d.price, "Price"),
+        note: d.id ? "Material updated" : "Material created",
+      });
+      Object.assign(m, {
+        name: text(d.name, "Material name"),
+        unit: text(d.unit, "Unit"),
+        price: num(d.price, "Price"),
+        category: text(d.category, "Category"),
+        profile: d.profile || "Other",
+        thickness: d.thickness || "",
+        active: d.active !== false,
+      });
+      if (!d.id) s.materials.push(m);
+      break;
+    }
+    case "user": {
+      permit("Admin");
+      need(
+        ["Admin", "Foreman", "Employee", "Client"].includes(d.role),
+        "Invalid role.",
+      );
+      const u = d.id ? get("users", d.id) : { id: id("USR") };
+      need(
+        !d.id || u.role === d.role,
+        "Existing personnel roles cannot be changed.",
+      );
+      Object.assign(u, {
+        name: text(d.name, "Name"),
+        role: d.role,
+        email: text(d.email, "Email"),
+        contact: text(d.contact, "Contact"),
+        photo: d.photo || u.photo || "",
+        rate: num(d.rate || 0, "Daily rate"),
+        initials: d.name
+          .split(" ")
+          .map((x) => x[0])
+          .slice(0, 2)
+          .join(""),
+      });
+      if (!d.id) s.users.push(u);
+      break;
+    }
+    case "enroll": {
+      permit("Admin");
+      const u = get("users", d.userId);
+      need(["Foreman", "Employee"].includes(u.role), "Choose field personnel.");
+      need(
+        Array.isArray(d.descriptor) &&
+          d.descriptor.length === 128 &&
+          d.descriptor.every(Number.isFinite),
+        "A valid facial descriptor is required.",
+      );
+      u.descriptor = d.descriptor;
+      break;
+    }
+    case "attendance": {
+      permit("Employee", "Foreman");
+      const u = get("users", actor.id);
+      need(u.descriptor, "Ask Admin to enroll your face before attendance.");
+      need(
+        Array.isArray(d.descriptor) &&
+          d.descriptor.length === 128 &&
+          d.descriptor.every(Number.isFinite),
+        "Face verification is required.",
+      );
+      const distance = Math.sqrt(
+        u.descriptor.reduce((a, x, i) => a + (x - d.descriptor[i]) ** 2, 0),
+      );
+      need(distance < 0.5, "Face verification failed. Please try again.");
+      need(
+        Number.isFinite(d.latitude) &&
+          Math.abs(d.latitude) <= 90 &&
+          Number.isFinite(d.longitude) &&
+          Math.abs(d.longitude) <= 180,
+        "Location recording is required.",
+      );
+      const today = now().slice(0, 10),
+        previous = s.attendance.find(
+          (a) => a.userId === u.id && a.date === today,
+        );
+      if (previous) {
+        need(!previous.checkOut, "Attendance is already complete for today.");
+        previous.checkOut = now();
+        previous.checkOutLatitude = d.latitude;
+        previous.checkOutLongitude = d.longitude;
+        previous.hours = money(
+          Math.min(
+            8,
+            (Date.parse(previous.checkOut) - Date.parse(previous.checkIn)) /
+              3600000,
+          ),
+        );
+        result = previous;
+        break;
+      }
+      const assigned = s.projects
+        .filter(
+          (p) =>
+            !p.locked &&
+            p.status === "Ongoing" &&
+            (p.foremanId === u.id || p.employeeIds.includes(u.id)) &&
+            p.start <= today &&
+            p.end >= today,
+        )
+        .sort(
+          (a, b) => a.start.localeCompare(b.start) || a.id.localeCompare(b.id),
+        );
+      need(
+        assigned.length,
+        "There is no active project assignment for today. Contact Admin.",
+      );
+      const p = assigned[0];
+      const a = {
+        id: id("ATT"),
+        userId: u.id,
+        projectId: p.id,
+        date: today,
+        checkIn: now(),
+        checkOut: null,
+        hours: 0,
+        latitude: d.latitude,
+        longitude: d.longitude,
+        verified: true,
+        source: "Face descriptor + geotag",
+      };
+      s.attendance.push(a);
+      result = a;
+      notify(u.role, "Attendance recorded", `${u.name} · ${p.name}`);
+      break;
+    }
+    case "payroll": {
+      permit("Admin");
+      const u = get("users", d.userId);
+      need(
+        ["Foreman", "Employee"].includes(u.role),
+        "Choose an employee or foreman.",
+      );
+      const from = date(d.from, "Period start"),
+        to = date(d.to, "Period end");
+      need(to >= from, "Invalid payroll period.");
+      need(
+        !s.payroll.some(
+          (p) => p.userId === u.id && p.from <= to && p.to >= from,
+        ),
+        "A payroll already overlaps this period.",
+      );
+      const attendance = s.attendance.filter(
+        (a) =>
+          a.userId === u.id &&
+          a.date >= from &&
+          a.date <= to &&
+          a.checkOut &&
+          a.verified,
+      );
+      need(
+        attendance.length,
+        "No completed, verified attendance for this period.",
+      );
+      const hours = money(attendance.reduce((a, x) => a + x.hours, 0)),
+        gross = money((hours / 8) * u.rate),
+        deductions = money(num(d.deductions || 0, "Deductions"));
+      need(deductions <= gross, "Deductions cannot exceed gross pay.");
+      s.payroll.push({
+        id: id("PR"),
+        userId: u.id,
+        from,
+        to,
+        attendanceIds: attendance.map((a) => a.id),
+        days: money(hours / 8),
+        hours,
+        rate: u.rate,
+        gross,
+        deductions,
+        net: money(gross - deductions),
+        status: "Processed",
+        createdAt: now(),
+      });
+      notify(u.role, "Payroll available", `${u.name} · ${from} to ${to}`);
+      break;
+    }
+    case "payrollPaid": {
+      permit("Admin");
+      get("payroll", d.id).status = "Paid";
+      break;
+    }
+    case "read": {
+      permit("Admin", "Foreman", "Employee", "Client");
+      s.notifications
+        .filter((n) => n.role === actor.role)
+        .forEach((n) => (n.read = true));
+      break;
+    }
+    case "settings": {
+      permit("Admin");
+      s.settings[0].name = text(d.name, "Company name");
+      s.settings[0].payrollNote = text(d.payrollNote, "Payroll policy");
+      break;
+    }
+    default:
+      fail("Unknown action.");
+  }
+  return result || { ok: true };
+}
