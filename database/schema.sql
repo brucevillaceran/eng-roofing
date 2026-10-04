@@ -163,7 +163,13 @@ CREATE TABLE IF NOT EXISTS `attendance` (
   `checkOutLongitude` DOUBLE NULL,
   `verified` BOOLEAN NULL,
   `source` TEXT NULL,
+  `foremanId` VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL,
+  `checkOutForemanId` VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL,
+  `createdAt` DATETIME(3) NULL,
+  `updatedAt` DATETIME(3) NULL,
   _fields JSON NOT NULL,
+  CONSTRAINT attendance_in_foreman FOREIGN KEY (`foremanId`) REFERENCES users(id) ON DELETE RESTRICT,
+  CONSTRAINT attendance_out_foreman FOREIGN KEY (`checkOutForemanId`) REFERENCES users(id) ON DELETE RESTRICT,
   FOREIGN KEY (`userId`) REFERENCES `users`(id) ON DELETE RESTRICT,
   FOREIGN KEY (`projectId`) REFERENCES `projects`(id) ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -176,6 +182,7 @@ CREATE TABLE IF NOT EXISTS `payroll` (
   `to` DATE NULL,
   `days` DOUBLE NULL,
   `hours` DOUBLE NULL,
+  `workedHours` DOUBLE NULL,
   `rate` DOUBLE NULL,
   `gross` DOUBLE NULL,
   `deductions` DOUBLE NULL,

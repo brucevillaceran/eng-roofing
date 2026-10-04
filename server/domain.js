@@ -1,4 +1,10 @@
 import {
+  workDate,
+  elapsedHours,
+  roundedHours,
+  payrollHours,
+} from "../shared/attendance.js";
+import {
   validateAction,
   actionRoles,
   numberValue,
@@ -552,6 +558,15 @@ export function apply(s, action, d, actor = {}) {
             s.quotations.find((q) => q.id === p.quotationId).downpayment,
           "Record the agreed downpayment before starting work.",
         );
+      need(
+        !s.attendance.some(
+          (a) =>
+            a.projectId === p.id &&
+            !a.checkOut &&
+            (!employeeIds.includes(a.userId) || !d.foremanId),
+        ),
+        "Complete active attendance before removing its Employee or the project Foreman.",
+      );
       Object.assign(p, {
         name: text(d.name || p.name, "Project name"),
         foremanId: d.foremanId || "",
@@ -658,6 +673,10 @@ export function apply(s, action, d, actor = {}) {
       permit("Admin", "Foreman");
       const p = project(d.id);
       need(p.status !== "Completed", "Project is already completed.");
+      need(
+        !s.attendance.some((a) => a.projectId === p.id && !a.checkOut),
+        "Complete all active Time Outs before completing the project.",
+      );
       need(
         p.foremanId && p.employeeIds.length,
         "Assign a foreman and employees before completion.",
@@ -833,26 +852,9 @@ export function apply(s, action, d, actor = {}) {
       break;
     }
     case "attendanceUpdate": {
-      permit("Admin");
-      const a = get("attendance", d.id);
-      need(
-        !s.payroll.some((p) => p.attendanceIds.includes(a.id)),
-        "Attendance used by payroll is preserved.",
+      fail(
+        "Manual attendance hour overrides are not allowed. Hours are calculated from verified Time In and Time Out.",
       );
-      const hours = num(d.hours, "Verified hours");
-      need(
-        a.checkOut && hours <= 8,
-        "Only completed attendance can be corrected (maximum eight hours).",
-      );
-      a.corrections ||= [];
-      a.corrections.push({
-        previousHours: a.hours,
-        hours,
-        reason: text(d.reason, "Correction reason"),
-        actorId: actor.id,
-        at: now(),
-      });
-      a.hours = hours;
       break;
     }
     case "paymentUpdate": {
@@ -926,82 +928,114 @@ export function apply(s, action, d, actor = {}) {
       break;
     }
     case "attendance": {
-      permit("Employee");
-      const u = get("users", actor.id);
-      need(u.descriptor, "Ask Admin to enroll your face before attendance.");
+      permit("Foreman");
+      const p = get("projects", d.projectId);
+      deny(
+        p.foremanId === actor.id,
+        "This project is assigned to another foreman.",
+      );
+      const u = get("users", d.userId);
+      deny(
+        u.role === "Employee" && p.employeeIds.includes(u.id),
+        "Choose an Employee assigned to this project.",
+      );
+      need(u.active !== false, "This Employee account is inactive.");
       need(
-        Array.isArray(d.descriptor) &&
-          d.descriptor.length === 128 &&
-          d.descriptor.every(Number.isFinite),
-        "Face verification is required.",
+        Array.isArray(u.descriptor) &&
+          u.descriptor.length === 128 &&
+          u.descriptor.every(
+            (x) =>
+              typeof x === "number" && Number.isFinite(x) && Math.abs(x) <= 2,
+          ),
+        "Ask Admin to enroll this Employee's face before attendance.",
       );
       const distance = Math.sqrt(
-        u.descriptor.reduce((a, x, i) => a + (x - d.descriptor[i]) ** 2, 0),
+        u.descriptor.reduce(
+          (sum, value, i) => sum + (value - d.descriptor[i]) ** 2,
+          0,
+        ),
       );
       need(distance < 0.5, "Face verification failed. Please try again.");
-      need(
-        Number.isFinite(d.latitude) &&
-          Math.abs(d.latitude) <= 90 &&
-          Number.isFinite(d.longitude) &&
-          Math.abs(d.longitude) <= 180,
-        "Location recording is required.",
-      );
-      const today = now().slice(0, 10),
-        previous = s.attendance.find(
-          (a) => a.userId === u.id && a.date === today,
+      const timestamp = now(),
+        today = workDate(timestamp);
+      const open = s.attendance.filter((a) => a.userId === u.id && !a.checkOut);
+      if (d.operation === "timeOut") {
+        const a = get("attendance", d.attendanceId);
+        deny(
+          a.userId === u.id && a.projectId === p.id,
+          "Attendance does not belong to this Employee and project.",
         );
-      if (previous) {
-        need(!previous.checkOut, "Attendance is already complete for today.");
         need(
-          Date.now() >= Date.parse(previous.checkIn),
-          "Check-out must follow check-in.",
+          a.checkIn && !a.checkOut,
+          "Time Out requires an active Time In; completed attendance cannot be recorded again.",
         );
-        previous.checkOut = now();
-        previous.checkOutLatitude = d.latitude;
-        previous.checkOutLongitude = d.longitude;
-        previous.hours = money(
-          Math.min(
-            8,
-            (Date.parse(previous.checkOut) - Date.parse(previous.checkIn)) /
-              3600000,
+        need(a.verified === true, "Only a verified Time In can be completed.");
+        need(
+          !s.payroll.some((pay) => pay.attendanceIds.includes(a.id)),
+          "Attendance used by payroll is preserved.",
+        );
+        const hours = roundedHours(elapsedHours({ ...a, checkOut: timestamp }));
+        Object.assign(a, {
+          checkOut: timestamp,
+          checkOutLatitude: d.latitude,
+          checkOutLongitude: d.longitude,
+          hours,
+          checkOutForemanId: actor.id,
+          updatedAt: timestamp,
+        });
+        result = a;
+      } else {
+        need(
+          !open.length,
+          "This Employee is already Timed In. Complete Time Out for the active project first.",
+        );
+        need(
+          !s.attendance.some(
+            (a) =>
+              a.userId === u.id && a.projectId === p.id && a.date === today,
           ),
+          "Attendance is already complete for this Employee, project and work date.",
         );
-        result = previous;
-        break;
-      }
-      const assigned = s.projects
-        .filter(
-          (p) =>
-            !p.locked &&
+        need(
+          !p.locked &&
             p.status === "Ongoing" &&
-            (p.foremanId === u.id || p.employeeIds.includes(u.id)) &&
             p.start <= today &&
             p.end >= today,
-        )
-        .sort(
-          (a, b) => a.start.localeCompare(b.start) || a.id.localeCompare(b.id),
+          "Time In requires an ongoing assigned project scheduled for today.",
         );
-      need(
-        assigned.length,
-        "There is no active project assignment for today. Contact Admin.",
+        // A new clock record must not change a period already processed for payroll.
+        need(
+          !s.payroll.some(
+            (pay) =>
+              pay.userId === u.id && pay.from <= today && pay.to >= today,
+          ),
+          "Payroll already includes this work date. Attendance cannot be added to a processed period.",
+        );
+        const a = {
+          id: id("ATT"),
+          userId: u.id,
+          projectId: p.id,
+          foremanId: actor.id,
+          date: today,
+          checkIn: timestamp,
+          checkOut: null,
+          hours: 0,
+          latitude: d.latitude,
+          longitude: d.longitude,
+          verified: true,
+          source: "Foreman portal · face descriptor + geotag",
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        };
+        s.attendance.push(a);
+        result = a;
+      }
+      notify(
+        "Employee",
+        d.operation === "timeIn" ? "Time In recorded" : "Time Out recorded",
+        `${u.name} · ${p.name}`,
+        [u.id],
       );
-      const p = assigned[0];
-      const a = {
-        id: id("ATT"),
-        userId: u.id,
-        projectId: p.id,
-        date: today,
-        checkIn: now(),
-        checkOut: null,
-        hours: 0,
-        latitude: d.latitude,
-        longitude: d.longitude,
-        verified: true,
-        source: "Face descriptor + geotag",
-      };
-      s.attendance.push(a);
-      result = a;
-      notify(u.role, "Attendance recorded", `${u.name} · ${p.name}`, [u.id]);
       break;
     }
     case "payroll": {
@@ -1018,6 +1052,13 @@ export function apply(s, action, d, actor = {}) {
         ),
         "A payroll already overlaps this period.",
       );
+      need(
+        !s.attendance.some(
+          (a) =>
+            a.userId === u.id && a.date >= from && a.date <= to && !a.checkOut,
+        ),
+        "Complete all active Time Outs in this payroll period first.",
+      );
       const attendance = s.attendance.filter(
         (a) =>
           a.userId === u.id &&
@@ -1030,7 +1071,7 @@ export function apply(s, action, d, actor = {}) {
         attendance.length,
         "No completed, verified attendance for this period.",
       );
-      const hours = money(attendance.reduce((a, x) => a + x.hours, 0)),
+      const { hours, workedHours } = payrollHours(attendance),
         gross = money((hours / 8) * u.rate),
         deductions = money(num(d.deductions || 0, "Deductions"));
       need(deductions <= gross, "Deductions cannot exceed gross pay.");
@@ -1040,6 +1081,7 @@ export function apply(s, action, d, actor = {}) {
         from,
         to,
         attendanceIds: attendance.map((a) => a.id),
+        workedHours,
         days: money(hours / 8),
         hours,
         rate: u.rate,

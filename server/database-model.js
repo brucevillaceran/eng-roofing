@@ -28,9 +28,9 @@ export const models = Object.fromEntries(
     usage:
       "projectId:ref-projects materialId:ref-materials used:number delivered:number",
     attendance:
-      "userId:ref-users projectId:ref-projects date:date checkIn:instant checkOut:instant hours:number latitude:number longitude:number checkOutLatitude:number checkOutLongitude:number verified:bool source",
+      "userId:ref-users projectId:ref-projects date:date checkIn:instant checkOut:instant hours:number latitude:number longitude:number checkOutLatitude:number checkOutLongitude:number verified:bool source foremanId:ref-users checkOutForemanId:ref-users createdAt:instant updatedAt:instant",
     payroll:
-      "userId:ref-users from:date to:date days:number hours:number rate:number gross:number deductions:number net:number status createdAt:instant releasedAt:instant correctionReason",
+      "userId:ref-users from:date to:date days:number hours:number workedHours:number rate:number gross:number deductions:number net:number status createdAt:instant releasedAt:instant correctionReason",
     payments:
       "projectId:ref-projects amount:number method date:date reference remarks createdAt:instant updatedAt:instant",
     feedback:

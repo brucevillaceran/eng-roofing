@@ -366,51 +366,50 @@ test("material usage rejects usage beyond delivery and cross-project records", (
     /does not belong/,
   );
 });
-test("facial descriptor enrollment, match, geotag, automatic assignment and checkout", () => {
+test("facial enrollment, match, geotag and explicit Foreman project checkout", () => {
   const s = seed(),
     descriptor = Array(128).fill(0.1);
+  s.attendance = [];
   s.projects[0].start = "2020-01-01";
   s.projects[0].end = "2099-12-31";
   apply(s, "enroll", { userId: employee.id, descriptor }, admin);
+  const request = {
+    projectId: "PRJ-001",
+    userId: employee.id,
+    operation: "timeIn",
+    descriptor,
+    latitude: 14.6,
+    longitude: 121,
+  };
   assert.throws(
     () =>
       apply(
         s,
         "attendance",
-        { descriptor: Array(128).fill(0.8), latitude: 14.6, longitude: 121 },
-        employee,
+        { ...request, descriptor: Array(128).fill(0.8) },
+        foreman,
       ),
     /failed/,
   );
   assert.throws(
-    () => apply(s, "attendance", { descriptor }, employee),
+    () => apply(s, "attendance", { ...request, latitude: undefined }, foreman),
     /location/,
   );
-  const a = apply(
-    s,
-    "attendance",
-    { descriptor, latitude: 14.6, longitude: 121 },
-    employee,
-  );
+  const a = apply(s, "attendance", request, foreman);
   assert.equal(a.projectId, "PRJ-001");
+  assert.equal(a.foremanId, foreman.id);
   assert.equal(a.verified, true);
   a.checkIn = new Date(Date.now() - 8 * 3600000).toISOString();
   const out = apply(
     s,
     "attendance",
-    { descriptor, latitude: 14.6, longitude: 121 },
-    employee,
+    { ...request, operation: "timeOut", attendanceId: a.id },
+    foreman,
   );
   assert.equal(out.hours, 8);
   assert.ok(out.checkOut);
   assert.throws(
-    () =>
-      apply(
-        s,
-        "attendance",
-        { descriptor, latitude: 14.6, longitude: 121 },
-        employee,
-      ),
+    () => apply(s, "attendance", request, foreman),
     /already complete/,
   );
 });
@@ -423,6 +422,17 @@ test("payroll uses only completed verified attendance, prevents overlap and reta
     hours: 8,
     date: "2026-10-03",
   });
+  assert.throws(
+    () =>
+      apply(
+        s,
+        "payroll",
+        { userId: "USR-3", from: "2026-10-01", to: "2026-10-04" },
+        admin,
+      ),
+    /active Time Outs/,
+  );
+  s.attendance = s.attendance.filter((a) => a.id !== "ATT-FAKE");
   apply(
     s,
     "payroll",

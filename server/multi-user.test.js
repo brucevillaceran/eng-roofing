@@ -425,9 +425,12 @@ test("multi-user end-to-end workflow, isolation, notifications, attendance and p
       latitude: 14.6,
       longitude: 121,
     },
-    400,
+    403,
   );
-  await env.action(users.employee, "attendance", {
+  await env.action(users.foreman, "attendance", {
+    projectId: p.id,
+    userId: users.employee.user.id,
+    operation: "timeIn",
     descriptor,
     latitude: 14.6,
     longitude: 121,
@@ -442,7 +445,11 @@ test("multi-user end-to-end workflow, isolation, notifications, attendance and p
   );
   attendance.checkIn = new Date(Date.now() - 8 * 3600000).toISOString();
   await env.store.save(state); // Synthetic clock fixture, no real personnel or biometric data.
-  await env.action(users.employee, "attendance", {
+  await env.action(users.foreman, "attendance", {
+    projectId: p.id,
+    userId: users.employee.user.id,
+    operation: "timeOut",
+    attendanceId: attendance.id,
     descriptor,
     latitude: 14.6,
     longitude: 121,
@@ -799,15 +806,17 @@ test("legacy booking linking and administrative corrections preserve history", a
     verified: true,
   });
   await env.store.save(s);
-  await env.action(env.admin, "attendanceUpdate", {
-    id: "correction",
-    hours: 8,
-    reason: "Approved correction",
-  });
-  assert.equal(
-    (await env.store.read()).attendance[0].corrections[0].previousHours,
-    7,
+  await env.action(
+    env.admin,
+    "attendanceUpdate",
+    {
+      id: "correction",
+      hours: 8,
+      reason: "Approved correction",
+    },
+    400,
   );
+  assert.equal((await env.store.read()).attendance[0].hours, 7);
   await env.action(
     env.admin,
     "user",

@@ -1,3 +1,4 @@
+import { columnUpgrades } from "./schema-upgrades.js";
 import { readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { models, children, tableName, quote } from "./database-model.js";
@@ -45,7 +46,11 @@ function matchingTables(info, name) {
 }
 function problems(
   info,
-  { allowMissing = false, allowArchiveRename = false } = {},
+  {
+    allowMissing = false,
+    allowArchiveRename = false,
+    allowUpgrades = false,
+  } = {},
 ) {
   const errors = [];
   for (const [table, columns] of Object.entries(requiredSchema)) {
@@ -68,7 +73,10 @@ function problems(
     )
       errors.push(`table ${actual} must be named ${table}`);
     for (const column of columns)
-      if (!info.tables.get(actual).has(column.toLowerCase()))
+      if (
+        !info.tables.get(actual).has(column.toLowerCase()) &&
+        !(allowUpgrades && columnUpgrades[table]?.[column])
+      )
         errors.push(`missing column ${actual}.${column}`);
   }
   return errors;
@@ -145,7 +153,11 @@ export async function initializeSchema(pool) {
     info = await inventory(connection);
     // DDL auto-commits: inspect existing tables before making any changes.
     assertSchema(
-      problems(info, { allowMissing: true, allowArchiveRename: true }),
+      problems(info, {
+        allowMissing: true,
+        allowArchiveRename: true,
+        allowUpgrades: true,
+      }),
     );
     const [archive] = matchingTables(info, "userpayrollarchive");
     if (archive && !info.lowerCaseNames && archive !== "userpayrollarchive") {
@@ -160,6 +172,11 @@ export async function initializeSchema(pool) {
     for (const [table, statement] of creates)
       if (!matchingTables(info, table).length)
         await connection.query(statement);
+    info = await inventory(connection);
+    for (const [table, upgrades] of Object.entries(columnUpgrades))
+      for (const [column, sql] of Object.entries(upgrades))
+        if (!info.tables.get(table).has(column.toLowerCase()))
+          await connection.query(`ALTER TABLE ${quote(table)} ${sql}`);
     assertSchema(problems(await inventory(connection)));
     const [[state]] = await connection.query(
       "SELECT revision FROM app_state WHERE id=1",

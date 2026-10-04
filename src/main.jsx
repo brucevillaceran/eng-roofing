@@ -1,3 +1,9 @@
+import {
+  workDate,
+  attendanceStatus,
+  elapsedHours,
+  roundedHours,
+} from "../shared/attendance.js";
 import React, {
   useState,
   useEffect,
@@ -143,6 +149,7 @@ const allowed = {
     "Tasks",
     "Project Progress",
     "Material Usage",
+    "Attendance",
     "Notifications",
     "Profile",
   ],
@@ -2494,16 +2501,6 @@ function ModalContent({ modal }) {
     title,
     subtitle,
     wide = false;
-  if (modal.type === "attendanceCapture")
-    return (
-      <Modal
-        title="Record attendance"
-        subtitle="Face verification and geotagging"
-        onClose={close}
-      >
-        <CameraCapture />
-      </Modal>
-    );
   if (modal.type === "projectDetail")
     return <ProjectDetail id={r.id} initialTab={modal.tab} />;
   if (modal.type === "estimate" || modal.type === "quotation")
@@ -2943,8 +2940,9 @@ function ModalContent({ modal }) {
           </div>
         </div>
         <div className="info full">
-          Attendance selects the earliest-starting ongoing assignment for the
-          current day. Avoid overlapping site assignments where possible.
+          Attendance is recorded by the assigned Foreman for the selected
+          project and current day. Avoid overlapping site assignments where
+          possible.
         </div>
       </Form>
     );
@@ -3256,7 +3254,8 @@ function ModalContent({ modal }) {
             {r.id} · {day(r.from)} – {day(r.to)}
           </p>
           {[
-            ["Verified hours", r.hours],
+            ["Hours worked", r.workedHours ?? r.hours],
+            ["Payable hours (maximum 8 per work date)", r.hours],
             ["Equivalent days", r.days],
             ["Daily rate", money(r.rate)],
             ["Gross pay", money(r.gross)],
@@ -3274,6 +3273,30 @@ function ModalContent({ modal }) {
           <Badge>{r.status}</Badge>
           {r.releasedAt && <p>Released {stamp(r.releasedAt)}</p>}
         </div>
+        <h3>Attendance included in this payslip</h3>
+        <DataTable
+          headers={[
+            "Record",
+            "Date",
+            "Project",
+            "Time In",
+            "Time Out",
+            "Hours worked",
+          ]}
+          rows={(r.attendanceIds || []).map((id) => {
+            const a = s.attendance.find((item) => item.id === id);
+            return [
+              id,
+              a ? day(a.date) : "Historical record",
+              s.projects.find((p) => p.id === a?.projectId)?.name ||
+                a?.projectId ||
+                "—",
+              a ? stamp(a.checkIn) : "—",
+              a?.checkOut ? stamp(a.checkOut) : "—",
+              a?.checkOut ? clockHours(a) : "—",
+            ];
+          })}
+        />
         <div className="form-footer">
           <Button variant="secondary" onClick={() => window.print()}>
             <Download size={15} />
@@ -3298,7 +3321,6 @@ function ModalContent({ modal }) {
   }
   if (
     [
-      "attendanceUpdate",
       "payrollUpdate",
       "paymentUpdate",
       "feedbackReview",
@@ -3306,27 +3328,6 @@ function ModalContent({ modal }) {
     ].includes(modal.type)
   ) {
     const config = {
-      attendanceUpdate: [
-        "Correct attendance",
-        <>
-          <Field
-            label="Verified hours"
-            name="hours"
-            type="number"
-            min="0"
-            max="8"
-            step="0.01"
-            value={r?.hours}
-            required
-          />
-          <Field
-            label="Correction reason"
-            name="reason"
-            type="textarea"
-            required
-          />
-        </>,
-      ],
       payrollUpdate: [
         "Adjust payroll deductions",
         <>
@@ -3794,8 +3795,17 @@ function QuotationEditor({ record, isNew }) {
 function ProjectDetail({ id, initialTab = "Overview" }) {
   const { s, user, setModal, act } = useApp(),
     [tab, setTab] = useState(initialTab);
-  const p = s.projects.find((p) => p.id === id),
-    q = s.quotations.find((q) => q.id === p.quotationId) || {
+  const p = s.projects.find((p) => p.id === id);
+  if (!p)
+    return (
+      <Modal title="Project unavailable" onClose={() => setModal(null)}>
+        <Empty
+          title="Project access changed"
+          text="This project is no longer in your assigned workspace."
+        />
+      </Modal>
+    );
+  const q = s.quotations.find((q) => q.id === p.quotationId) || {
       id: p.quotationId,
       items: [],
       total: 0,
@@ -3842,6 +3852,9 @@ function ProjectDetail({ id, initialTab = "Overview" }) {
             ? ["Materials"]
             : []),
           ...(["Admin", "Client"].includes(user.role) ? ["Payments"] : []),
+          ...(["Admin", "Foreman", "Employee"].includes(user.role)
+            ? ["Attendance"]
+            : []),
           "Timeline",
         ].map((t) => (
           <button
@@ -3854,6 +3867,9 @@ function ProjectDetail({ id, initialTab = "Overview" }) {
           </button>
         ))}
       </div>
+      {tab === "Attendance" && user.role !== "Client" && (
+        <Attendance projectId={p.id} />
+      )}
       {tab === "Overview" && (
         <>
           <div className="detail-grid">
@@ -4125,11 +4141,46 @@ function ProjectDetail({ id, initialTab = "Overview" }) {
     </Modal>
   );
 }
-function Attendance() {
-  const { s, user, setModal } = useApp();
-  const entries = s.attendance.filter(
-    (a) => user.role === "Admin" || a.userId === user.id,
+function clockHours(record) {
+  try {
+    return roundedHours(elapsedHours(record));
+  } catch {
+    return "Needs review";
+  }
+}
+function Attendance({ projectId }) {
+  const { s, user } = useApp();
+  const [selection, setSelection] = useState(projectId || "");
+  const [capture, setCapture] = useState(null);
+  const [notice, setNotice] = useState("");
+  const foreman = user.role === "Foreman";
+  const projects = s.projects.filter(
+    (p) => !foreman || p.foremanId === user.id,
   );
+  // Keep an Employee's own history reachable after reassignment without
+  // exposing details of projects they can no longer open.
+  if (user.role === "Employee")
+    for (const a of s.attendance)
+      if (!projects.some((p) => p.id === a.projectId))
+        projects.push({
+          id: a.projectId,
+          name: `Past project ${a.projectId}`,
+          client: "",
+          employeeIds: [],
+        });
+  const selected = projectId || selection || projects[0]?.id;
+  const p = projects.find((project) => project.id === selected);
+  const entries = s.attendance.filter((a) => a.projectId === p?.id);
+  const employees = s.users.filter(
+    (u) => u.role === "Employee" && p?.employeeIds.includes(u.id),
+  );
+  const today = workDate();
+  const canTimeIn =
+    p &&
+    !p.locked &&
+    p.status === "Ongoing" &&
+    p.start <= today &&
+    p.end >= today;
   return (
     <>
       <div className="attendance-banner">
@@ -4138,88 +4189,197 @@ function Attendance() {
         </span>
         <div>
           <h3>
-            {user.role === "Admin"
-              ? "Verified attendance. Connected payroll."
-              : "Ready for the day? Check in here."}
+            {foreman ? "Project attendance" : "Verified attendance history"}
           </h3>
           <p>
-            Face verification → location recording → assigned project →
-            attendance.
+            {foreman
+              ? "Select the Employee, then let them verify their face for Time In or Time Out."
+              : "Time In and Time Out are recorded through the assigned Foreman's project portal. Hours cannot be entered manually."}
           </p>
         </div>
-        {user.role !== "Admin" && (
-          <Button onClick={() => setModal({ type: "attendanceCapture" })}>
-            <Camera size={17} />
-            Verify & record attendance
-          </Button>
-        )}
       </div>
-      {user.role !== "Admin" && (
-        <div className="info">
-          Your project is identified automatically from your current assignment.
-          Location is recorded as a geotag. Complete check-out to make worked
-          hours available to payroll.
-        </div>
+      {!projectId && (
+        <Field
+          label={foreman ? "Assigned project" : "Project"}
+          name="attendanceProject"
+          options={projects.map((p) => ({
+            value: p.id,
+            label: `${p.name} · ${p.client || p.id}`,
+          }))}
+          value={p?.id || ""}
+          onChange={(e) => {
+            setSelection(e.target.value);
+            setCapture(null);
+            setNotice("");
+          }}
+        />
       )}
-      <section className="card">
-        <CardHead
-          title="Attendance records"
-          subtitle="Verified time and recorded location"
+      {!p ? (
+        <Empty
+          title="No assigned project"
+          text="Project attendance becomes available after Admin assigns a Foreman and Employees."
         />
-        <DataTable
-          headers={[
-            "Employee",
-            "Assigned project",
-            "Date",
-            "Check in",
-            "Check out",
-            "Hours",
-            "Geotag",
-            "Verification",
-            "",
-          ]}
-          rows={entries.map((a) => [
-            s.users.find((u) => u.id === a.userId)?.name,
-            s.projects.find((p) => p.id === a.projectId)?.name,
-            day(a.date),
-            new Date(a.checkIn).toLocaleTimeString(),
-            a.checkOut
-              ? new Date(a.checkOut).toLocaleTimeString()
-              : "Not checked out",
-            a.hours,
-            <a
-              className="text-button"
-              href={`https://www.openstreetmap.org/?mlat=${a.latitude}&mlon=${a.longitude}#map=16/${a.latitude}/${a.longitude}`}
-              target="_blank"
-            >
-              {a.latitude.toFixed(4)}, {a.longitude.toFixed(4)}
-              <MapPin size={12} />
-            </a>,
-            <Name
-              name={a.verified ? "Verified" : "Unverified"}
-              sub={a.source}
-            />,
-            user.role === "Admin" &&
-            a.checkOut &&
-            !s.payroll.some((p) => p.attendanceIds.includes(a.id)) ? (
-              <Button
-                variant="small secondary"
-                onClick={() =>
-                  setModal({ type: "attendanceUpdate", record: a })
-                }
-              >
-                Correct hours
+      ) : (
+        <>
+          <h3>
+            PROJECT: {p.name} · {p.client}
+          </h3>
+          <div className="info">
+            Hours worked are calculated from Time In and Time Out. Payroll
+            retains the maximum of eight payable hours per work date across
+            projects; no automatic break deduction is applied.
+          </div>
+          {notice && (
+            <p className="info" role="status">
+              {notice}
+            </p>
+          )}
+          {foreman && (
+            <section className="card">
+              <CardHead
+                title="Today's assigned Employees"
+                subtitle="Completed sessions cannot be repeated. Open sessions from a prior date remain available for Time Out."
+              />
+              <DataTable
+                headers={[
+                  "Employee",
+                  "Status",
+                  "Time In",
+                  "Time Out",
+                  "Hours worked",
+                  "Facial recognition",
+                ]}
+                rows={employees.map((employee) => {
+                  const a =
+                    entries.find(
+                      (a) => a.userId === employee.id && !a.checkOut,
+                    ) ||
+                    entries.find(
+                      (a) => a.userId === employee.id && a.date === today,
+                    );
+                  const operation = a?.checkIn ? "timeOut" : "timeIn";
+                  const disabled =
+                    !!a?.checkOut ||
+                    !employee.enrolled ||
+                    employee.active === false ||
+                    (!a && !canTimeIn);
+                  return [
+                    employee.name,
+                    attendanceStatus(a),
+                    a ? stamp(a.checkIn) : "—",
+                    a?.checkOut ? stamp(a.checkOut) : "—",
+                    a?.checkOut ? clockHours(a) : "—",
+                    <div>
+                      <Button
+                        variant="small secondary"
+                        disabled={disabled || !!capture}
+                        onClick={() => {
+                          setNotice("");
+                          setCapture({
+                            projectId: p.id,
+                            userId: employee.id,
+                            operation,
+                            ...(a ? { attendanceId: a.id } : {}),
+                          });
+                        }}
+                      >
+                        {operation === "timeIn" ? "Time In" : "Time Out"} ·{" "}
+                        {employee.name}
+                      </Button>
+                      {!employee.enrolled && (
+                        <small>Ask Admin to enroll this Employee's face.</small>
+                      )}
+                    </div>,
+                  ];
+                })}
+              />
+              {!canTimeIn && (
+                <p className="info">
+                  New Time In requires an ongoing project scheduled for today.
+                  Existing sessions can still Time Out.
+                </p>
+              )}
+            </section>
+          )}
+          {foreman && capture && capture.projectId === p.id && (
+            <section className="card padded">
+              <h3>
+                {capture.operation === "timeIn" ? "Time In" : "Time Out"}:{" "}
+                {employees.find((u) => u.id === capture.userId)?.name}
+              </h3>
+              <p>
+                Project: {p.name}. The selected Employee must face the camera.
+              </p>
+              <CameraCapture
+                key={`${capture.userId}-${capture.operation}`}
+                attendance={capture}
+                onDone={() => {
+                  setNotice(
+                    `${capture.operation === "timeIn" ? "Time In" : "Time Out"} recorded successfully for this project.`,
+                  );
+                  setCapture(null);
+                }}
+              />
+              <Button variant="secondary" onClick={() => setCapture(null)}>
+                Cancel capture
               </Button>
-            ) : (
-              ""
-            ),
-          ])}
-        />
-      </section>
+            </section>
+          )}
+          <section className="card">
+            <CardHead
+              title="Attendance history"
+              subtitle="Verified clock records for the selected project"
+            />
+            <DataTable
+              headers={[
+                "Employee",
+                "Work date",
+                "Status",
+                "Time In",
+                "Time Out",
+                "Hours worked",
+                "Foreman",
+                "Verification",
+                "Geotag",
+              ]}
+              rows={[...entries]
+                .sort((a, b) => b.checkIn.localeCompare(a.checkIn))
+                .map((a) => [
+                  s.users.find((u) => u.id === a.userId)?.name || a.userId,
+                  day(a.date),
+                  attendanceStatus(a),
+                  stamp(a.checkIn),
+                  a.checkOut ? stamp(a.checkOut) : "Working",
+                  a.checkOut ? clockHours(a) : "—",
+                  s.users.find((u) => u.id === a.foremanId)?.name ||
+                    a.foremanId ||
+                    "Not recorded",
+                  <Name
+                    name={a.verified ? "Verified" : "Unverified"}
+                    sub={a.source}
+                  />,
+                  Number.isFinite(a.latitude) &&
+                  Number.isFinite(a.longitude) ? (
+                    <a
+                      className="text-button"
+                      href={`https://www.openstreetmap.org/?mlat=${a.latitude}&mlon=${a.longitude}`}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      {a.latitude.toFixed(4)}, {a.longitude.toFixed(4)}
+                    </a>
+                  ) : (
+                    "Not recorded"
+                  ),
+                ])}
+            />
+          </section>
+        </>
+      )}
     </>
   );
 }
-function CameraCapture({ enrollUser, onCapture }) {
+function CameraCapture({ enrollUser, onCapture, attendance, onDone }) {
   const { user, act, setModal } = useApp(),
     video = useRef(),
     stream = useRef(),
@@ -4310,11 +4470,19 @@ function CameraCapture({ enrollUser, onCapture }) {
             maximumAge: 0,
           }),
         );
-        await act("attendance", {
-          descriptor,
-          latitude: pos.coords.latitude,
-          longitude: pos.coords.longitude,
-        });
+        if (!attendance)
+          throw new Error("Select an assigned project and Employee first.");
+        await act(
+          "attendance",
+          {
+            ...attendance,
+            descriptor,
+            latitude: pos.coords.latitude,
+            longitude: pos.coords.longitude,
+          },
+          true,
+        );
+        onDone?.();
       }
     } catch (e) {
       setError(e.message);
@@ -4330,7 +4498,7 @@ function CameraCapture({ enrollUser, onCapture }) {
       <div className="info">
         {enrollUser || onCapture
           ? "Admin-supervised enrollment saves a 128-value face descriptor for this employee."
-          : "Your face is compared with your enrolled descriptor. Your assigned project is selected automatically."}{" "}
+          : "The selected Employee’s face is compared on the server with their enrolled descriptor, and project assignments are checked again. No camera image is saved."}{" "}
         Face verification does not perform liveness detection.
       </div>
       <Button type="button" disabled={busy} onClick={ready ? capture : start}>
@@ -4344,7 +4512,9 @@ function CameraCapture({ enrollUser, onCapture }) {
           : ready
             ? enrollUser || onCapture
               ? "Save face enrollment"
-              : "Verify & check in / out"
+              : attendance?.operation === "timeOut"
+                ? "Verify face & Time Out"
+                : "Verify face & Time In"
             : "Enable camera"}
       </Button>
     </div>
