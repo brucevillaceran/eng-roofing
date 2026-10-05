@@ -155,9 +155,45 @@ export function apply(s, action, d, actor = {}) {
     deny(b.clientId === actor.id, "This booking belongs to another client.");
     return b;
   };
+  const inspectionServiceType = (booking, inspection = {}) =>
+    inspection.serviceType || booking.service || "Roof Installation";
+  const defaultInspectionItems = (serviceType) => {
+    if (!["Roof Installation", "Roof Replacement"].includes(serviceType))
+      return [];
+    const catalog = s.materials.filter((material) => material.active);
+    const lookup = (name) =>
+      catalog.find((material) => material.name === name) || null;
+    const sheet =
+      lookup("Twin Rib") ||
+      lookup("Banawe") ||
+      lookup("Tilespan") ||
+      catalog.find((material) => material.category === "Roofing Sheet") ||
+      null;
+    const rows = [
+      ["Roofing Sheet", sheet],
+      ["Ridge Cap", lookup("Ridge Cap")],
+      ["Flashing", lookup("Flashing")],
+      ["Valley Flashing", lookup("Valley Flashing")],
+      ["Eaves Flashing", lookup("Eaves Flashing")],
+      ["Barge/Side Flashing", lookup("Barge/Side Flashing")],
+      ["Roofing Screws", lookup("Roofing Screws")],
+      ["Sealant", lookup("Sealant")],
+      ["Closure Strips", lookup("Closure Strips")],
+      ["Gutter", lookup("Gutter")],
+      ["Downspout", lookup("Downspout")],
+    ].filter(([, material]) => material);
+    return rows.map(([name, material]) => ({
+      materialId: material.id,
+      name,
+      unit: material.unit,
+      quantity: "",
+      price: material.price,
+    }));
+  };
   const updateInspection = (inspection, data) => {
     for (const key of [
       "date",
+      "serviceType",
       "area",
       "linear",
       "sections",
@@ -216,14 +252,15 @@ export function apply(s, action, d, actor = {}) {
       });
     }
   };
-  const inspectionCharges = (booking, details = {}) => {
+  const inspectionCharges = (booking, details = {}, inspection = {}) => {
+    const serviceType = inspectionServiceType(booking, inspection);
     const removal =
-        booking.service === "Roof Replacement" &&
+        serviceType === "Roof Replacement" &&
         (details.removalRequired || details.disposalRequired)
           ? details.removalCharges || 0
           : 0,
       repairs =
-        booking.service === "Roof Repair" ? details.repairCharges || 0 : 0,
+        serviceType === "Roof Repair" ? details.repairCharges || 0 : 0,
       additional = details.additionalCharges || 0;
     return money(removal + repairs + additional);
   };
@@ -357,6 +394,7 @@ export function apply(s, action, d, actor = {}) {
           s.inspections.push({
             id: id("IN"),
             bookingId: b.id,
+            serviceType: b.service,
             date: b.date,
             status: "Awaiting Assignment",
             area: 0,
@@ -368,6 +406,7 @@ export function apply(s, action, d, actor = {}) {
             accessories: [],
             notes: "",
             photos: [],
+            items: defaultInspectionItems(b.service),
           });
         const approval = bookingApprovalEmail(b);
         email(b, approval.subject, approval.message, approval.path);
@@ -437,6 +476,8 @@ export function apply(s, action, d, actor = {}) {
         i.foremanId,
         "Assign an inspector before submitting the inspection.",
       );
+      const serviceType = inspectionServiceType(b, i);
+      need(serviceType, "Choose the inspection service type.");
       need(i.date, "Enter the inspection date.");
       need(i.area > 0, "Roof area must be greater than zero.");
       need(i.linear > 0, "Linear measurement must be greater than zero.");
@@ -450,12 +491,12 @@ export function apply(s, action, d, actor = {}) {
       );
       need(i.complexity, "Select the roof complexity.");
       const details = i.details || {};
-      if (b.service === "Roof Installation")
+      if (serviceType === "Roof Installation")
         need(
           details.supportingCondition,
           "Enter the supporting structure condition.",
         );
-      if (b.service === "Roof Replacement") {
+      if (serviceType === "Roof Replacement") {
         need(i.condition, "Enter the existing roof condition.");
         need(
           details.existingProfile &&
@@ -466,7 +507,7 @@ export function apply(s, action, d, actor = {}) {
         need(details.replacementScope, "Select the replacement scope.");
         need(details.structuralWork, "Select the structural work required.");
       }
-      if (b.service === "Roof Repair") {
+      if (serviceType === "Roof Repair") {
         need(i.condition, "Enter the existing roof condition.");
         need(
           details.existingProfile &&
@@ -481,7 +522,7 @@ export function apply(s, action, d, actor = {}) {
         i.items?.length && i.items.every((item) => Number(item.quantity) > 0),
         "Select materials and enter a positive quantity for each.",
       );
-      const charges = inspectionCharges(b, details),
+      const charges = inspectionCharges(b, details, i),
         total = money(
           i.items.reduce((sum, item) => sum + item.quantity * item.price, 0) +
             charges,
@@ -531,6 +572,7 @@ export function apply(s, action, d, actor = {}) {
       const sections = num(d.sections, "Roof sections", 1);
       need(Number.isInteger(sections), "Roof sections must be a whole number.");
       Object.assign(i, {
+        serviceType: d.serviceType || i.serviceType || b.service,
         area: num(d.area, "Roof area", 0.01),
         linear: num(d.linear, "Linear measurement"),
         sections,

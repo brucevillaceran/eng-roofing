@@ -269,11 +269,11 @@ const schemas = {
   bookingDecision: "id status",
   inspectionAssign: "id foremanId date",
   inspection:
-    "id date area linear sections profile complexity condition accessories notes clientNotes photos",
+    "id date serviceType area linear sections profile complexity condition accessories notes clientNotes photos",
   inspectionDraft:
-    "id date area linear sections profile complexity condition accessories notes clientNotes photos items details",
+    "id date serviceType area linear sections profile complexity condition accessories notes clientNotes photos items details",
   inspectionSubmit:
-    "id date area linear sections profile complexity condition accessories notes clientNotes photos items details",
+    "id date serviceType area linear sections profile complexity condition accessories notes clientNotes photos items details",
   estimate: "inspectionId items charges notes",
   finalize: "id items charges downpayment notes",
   quoteDecision: "id token status name",
@@ -387,6 +387,12 @@ export function validateAction(action, input, { state, user } = {}) {
         date("date", "Inspection date", {
           ...(submitting ? { max: today() } : {}),
         });
+      if (has("serviceType"))
+        select("serviceType", "Service type", [
+          "Roof Installation",
+          "Roof Replacement",
+          "Roof Repair",
+        ]);
       for (const [key, label, options] of [
         ["area", "Roof area", { min: 0.01, max: limits.measurement }],
         [

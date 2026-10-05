@@ -14,7 +14,7 @@ export function seed() {
     ["Barge/Side Flashing", "LM", 300],
     ["Roofing Screws", "PCS", 5],
     ["Sealant", "TUBE", 220],
-    ["Closure Strips", "LM", 80],
+    ["Closure Strips", "PCS", 80],
     ["Gutter", "LM", 500],
     ["Downspout", "LM", 400],
   ].map(([name, unit, price], i) => ({

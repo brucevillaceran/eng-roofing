@@ -3296,8 +3296,45 @@ function InspectionEditor({ inspection: initialInspection }) {
       s.inspections.find((item) => item.id === initialInspection.id) ||
       initialInspection,
     booking = s.bookings.find((item) => item.id === inspection.bookingId),
+    inspectionService = inspection.serviceType || booking.service,
+    defaultInspectionRows =
+      ["Roof Installation", "Roof Replacement"].includes(inspectionService) &&
+      (() => {
+        const catalog = s.materials.filter((material) => material.active);
+        const lookup = (name) =>
+          catalog.find((material) => material.name === name) || null;
+        const roofingSheet =
+          lookup("Twin Rib") ||
+          lookup("Banawe") ||
+          lookup("Tilespan") ||
+          catalog.find((material) => material.category === "Roofing Sheet") ||
+          null;
+        const rows = [
+          ["Roofing Sheet", roofingSheet],
+          ["Ridge Cap", lookup("Ridge Cap")],
+          ["Flashing", lookup("Flashing")],
+          ["Valley Flashing", lookup("Valley Flashing")],
+          ["Eaves Flashing", lookup("Eaves Flashing")],
+          ["Barge/Side Flashing", lookup("Barge/Side Flashing")],
+          ["Roofing Screws", lookup("Roofing Screws")],
+          ["Sealant", lookup("Sealant")],
+          ["Closure Strips", lookup("Closure Strips")],
+          ["Gutter", lookup("Gutter")],
+          ["Downspout", lookup("Downspout")],
+        ].filter(([, material]) => material);
+        return rows.map(([name, material]) => ({
+          materialId: material.id,
+          name,
+          unit: material.unit,
+          quantity: "",
+          price: material.price,
+        }));
+      })(),
     [items, setItems] = useState(
-      (inspection.items || []).map((item) => ({ ...item })),
+      (inspection.items && inspection.items.length
+        ? inspection.items
+        : defaultInspectionRows || []
+      ).map((item) => ({ ...item })),
     ),
     [details, setDetails] = useState(inspection.details || {}),
     [photos, setPhotos] = useState(inspection.photos || []),
@@ -3324,11 +3361,11 @@ function InspectionEditor({ inspection: initialInspection }) {
     repair = Number(details.repairCharges || 0),
     additional = Number(details.additionalCharges || 0),
     includeRemoval =
-      booking.service === "Roof Replacement" &&
+      inspectionService === "Roof Replacement" &&
       (details.removalRequired === true || details.disposalRequired === true),
     totalCharges =
       (includeRemoval ? removal : 0) +
-      (booking.service === "Roof Repair" ? repair : 0) +
+      (inspectionService === "Roof Repair" ? repair : 0) +
       additional,
     initialEstimate = totalMaterials + totalCharges;
   const accessories = s.materials.filter(
@@ -3509,6 +3546,12 @@ function InspectionEditor({ inspection: initialInspection }) {
             "Roof measurements",
             <>
               <Field
+                label="Service type"
+                name="serviceType"
+                options={services}
+                value={inspection.serviceType || booking.service}
+              />
+              <Field
                 label="Inspection date"
                 name="date"
                 type="date"
@@ -3556,7 +3599,7 @@ function InspectionEditor({ inspection: initialInspection }) {
               />
             </>,
           )}
-          {booking.service === "Roof Installation" &&
+          {inspectionService === "Roof Installation" &&
             section(
               "Supporting structure condition",
               <>
@@ -3580,7 +3623,7 @@ function InspectionEditor({ inspection: initialInspection }) {
                 />
               </>,
             )}
-          {booking.service === "Roof Replacement" &&
+          {inspectionService === "Roof Replacement" &&
             section(
               "Existing roof and replacement scope",
               <>
@@ -3735,7 +3778,7 @@ function InspectionEditor({ inspection: initialInspection }) {
                 )}
               </>,
             )}
-          {booking.service === "Roof Repair" &&
+          {inspectionService === "Roof Repair" &&
             section(
               "Existing roof and repair details",
               <>
@@ -3924,7 +3967,7 @@ function InspectionEditor({ inspection: initialInspection }) {
                   </select>
                 )}
               </div>
-              {booking.service !== "Roof Installation" && (
+              {inspectionService !== "Roof Installation" && (
                 <Field
                   label="Additional work"
                   name="additionalWork"
@@ -3981,7 +4024,7 @@ function InspectionEditor({ inspection: initialInspection }) {
                     <br />
                   </>
                 )}
-                {booking.service === "Roof Repair" && (
+                {inspectionService === "Roof Repair" && (
                   <>
                     <strong>Repair charges:</strong> {money(repair)}
                     <br />
