@@ -3331,19 +3331,8 @@ function InspectionEditor({ inspection: initialInspection }) {
       (total, item) => total + inspectionMaterialAmount(item),
       0,
     ),
-    removal = Number(details.removalCharges || 0),
-    repair = Number(details.repairCharges || 0),
-    labor = Number(details.laborCharges || 0),
-    additional = Number(details.additionalCharges || 0),
-    includeRemoval =
-      serviceType === "Roof Replacement" &&
-      (details.removalRequired === true || details.disposalRequired === true),
-    totalCharges =
-      (includeRemoval ? removal : 0) +
-      (serviceType === "Roof Repair" ? repair : 0) +
-      labor +
-      additional,
-    initialEstimate = totalMaterials + totalCharges;
+    estimatedWorkers = Number(details.estimatedWorkers || 0),
+    initialEstimate = totalMaterials;
   const accessories = s.materials.filter(
     (material) => material.active && material.category === "Accessory",
   );
@@ -3415,10 +3404,7 @@ function InspectionEditor({ inspection: initialInspection }) {
         "damagedSheets",
         "repairType",
         "otherDamageType",
-        "removalCharges",
-        "laborCharges",
-        "repairCharges",
-        "additionalCharges",
+        "estimatedWorkers",
         "additionalWork",
       ]) {
         if (raw[key] !== undefined) {
@@ -3647,20 +3633,6 @@ function InspectionEditor({ inspection: initialInspection }) {
                   value={details.supportingCondition || ""}
                 />
                 <Field
-                  label="Labor requirement / charges (₱)"
-                  name="laborCharges"
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={details.laborCharges ?? 0}
-                  onChange={(event) =>
-                    setDetails((current) => ({
-                      ...current,
-                      laborCharges: event.target.value,
-                    }))
-                  }
-                />
-                <Field
                   label="Supporting structure notes"
                   name="supportingNotes"
                   type="textarea"
@@ -3775,20 +3747,6 @@ function InspectionEditor({ inspection: initialInspection }) {
                     setDetails((current) => ({
                       ...current,
                       disposalRequired: event.target.value === "true",
-                    }))
-                  }
-                />
-                <Field
-                  label="Removal / disposal charges"
-                  name="removalCharges"
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={details.removalCharges ?? 0}
-                  onChange={(event) =>
-                    setDetails((current) => ({
-                      ...current,
-                      removalCharges: event.target.value,
                     }))
                   }
                 />
@@ -3928,20 +3886,6 @@ function InspectionEditor({ inspection: initialInspection }) {
                   step="1"
                   value={details.damagedSheets || ""}
                 />
-                <Field
-                  label="Repair charges"
-                  name="repairCharges"
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={details.repairCharges ?? 0}
-                  onChange={(event) =>
-                    setDetails((current) => ({
-                      ...current,
-                      repairCharges: event.target.value,
-                    }))
-                  }
-                />
               </>,
             )}
           {section(
@@ -4076,6 +4020,21 @@ function InspectionEditor({ inspection: initialInspection }) {
                   </select>
                 )}
               </div>
+              <Field
+                label="Estimated number of workers"
+                name="estimatedWorkers"
+                type="number"
+                min="1"
+                max="1000"
+                step="1"
+                value={details.estimatedWorkers ?? ""}
+                onChange={(event) =>
+                  setDetails((current) => ({
+                    ...current,
+                    estimatedWorkers: event.target.value,
+                  }))
+                }
+              />
               {serviceType !== "Roof Installation" && (
                 <Field
                   label="Additional work"
@@ -4084,36 +4043,6 @@ function InspectionEditor({ inspection: initialInspection }) {
                   value={details.additionalWork || ""}
                 />
               )}
-              {serviceType !== "Roof Installation" && (
-                <Field
-                  label="Labor requirement / charges (₱)"
-                  name="laborCharges"
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={details.laborCharges ?? 0}
-                  onChange={(event) =>
-                    setDetails((current) => ({
-                      ...current,
-                      laborCharges: event.target.value,
-                    }))
-                  }
-                />
-              )}
-              <Field
-                label="Other additional charges"
-                name="additionalCharges"
-                type="number"
-                min="0"
-                step="0.01"
-                value={details.additionalCharges ?? 0}
-                onChange={(event) =>
-                  setDetails((current) => ({
-                    ...current,
-                    additionalCharges: event.target.value,
-                  }))
-                }
-              />
             </>,
           )}
           {section(
@@ -4142,28 +4071,14 @@ function InspectionEditor({ inspection: initialInspection }) {
               <div className="info full">
                 <strong>Total material cost:</strong> {money(totalMaterials)}
                 <br />
-                {includeRemoval && (
-                  <>
-                    <strong>Removal / disposal charges:</strong>{" "}
-                    {money(removal)}
-                    <br />
-                  </>
-                )}
-                <strong>Labor charges:</strong> {money(labor)}
+                <strong>Estimated number of workers:</strong>{" "}
+                {estimatedWorkers || 0}
                 <br />
-                {serviceType === "Roof Repair" && (
-                  <>
-                    <strong>Repair charges:</strong> {money(repair)}
-                    <br />
-                  </>
-                )}
-                <strong>Other additional charges:</strong> {money(additional)}
-                <hr />
-                <strong>Initial Estimated Cost:</strong>{" "}
+                <strong>Initial material estimate:</strong>{" "}
                 {money(initialEstimate)}
                 <br />
                 <small>
-                  This is an initial estimate, not the final quotation.
+                  This is an initial material estimate, not the final quotation.
                 </small>
               </div>
             </>,
@@ -4210,6 +4125,9 @@ function InspectionEditor({ inspection: initialInspection }) {
             <span>
               Initial estimate:{" "}
               <b>{quote ? money(quote.total) : money(initialEstimate)}</b>
+            </span>
+            <span>
+              Estimated workers: <b>{inspection.details?.estimatedWorkers ?? "Not set"}</b>
             </span>
           </div>
           <div className="info">
@@ -4458,10 +4376,11 @@ function QuotationEditor({ record, isNew }) {
         ["Initial Estimate", "Under Review"].includes(record.status)),
     total =
       items.reduce((a, x) => a + Number(x.quantity || 0) * x.price, 0) +
-      Number(charges || 0);
+      (isNew ? 0 : Number(charges || 0));
   const [downpayment, setDownpayment] = useState(
     isNew ? 0 : record.downpayment,
   );
+  const quoteCharges = isNew ? 0 : Number(charges || 0);
   return (
     <Modal
       wide
@@ -4479,6 +4398,9 @@ function QuotationEditor({ record, isNew }) {
         <span>{inspection.profile}</span>
         <span>
           {inspection.complexity} · {inspection.sections} sections
+        </span>
+        <span>
+          Estimated workers: <b>{inspection.details?.estimatedWorkers ?? "Not set"}</b>
         </span>
       </div>
       <div className="info">
@@ -4502,7 +4424,7 @@ function QuotationEditor({ record, isNew }) {
                 materialId,
                 quantity,
               })),
-              charges,
+              charges: isNew ? 0 : charges,
               notes: form.get("notes"),
             });
           } catch (e) {
@@ -4593,24 +4515,26 @@ function QuotationEditor({ record, isNew }) {
         <div className="quote-totals">
           <div>
             <span>Material subtotal</span>
-            <b>{money(total - Number(charges))}</b>
+            <b>{money(total - quoteCharges)}</b>
           </div>
-          <div>
-            <span>Additional charges (₱)</span>
-            <input
-              max="1000000000"
-              onInput={(e) => checkField(e.currentTarget)}
-              aria-label="Additional charges"
-              type="number"
-              min="0"
-              step="0.01"
-              disabled={!editable}
-              value={charges}
-              onChange={(e) => setCharges(e.target.value)}
-            />
-          </div>
+          {!isNew && (
+            <div>
+              <span>Additional charges (₱)</span>
+              <input
+                max="1000000000"
+                onInput={(e) => checkField(e.currentTarget)}
+                aria-label="Additional charges"
+                type="number"
+                min="0"
+                step="0.01"
+                disabled={!editable}
+                value={charges}
+                onChange={(e) => setCharges(e.target.value)}
+              />
+            </div>
+          )}
           <div className="quote-grand">
-            <span>Total quotation</span>
+            <span>{isNew ? "Initial material estimate" : "Total quotation"}</span>
             <strong>{money(total)}</strong>
           </div>
           {!isNew && (

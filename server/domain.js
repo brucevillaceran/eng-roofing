@@ -233,16 +233,10 @@ export function apply(s, action, d, actor = {}) {
     }
   };
   const inspectionCharges = (booking, details = {}, inspection = {}) => {
-    const serviceType = inspectionServiceType(booking, inspection);
-    const removal =
-        serviceType === "Roof Replacement" &&
-        (details.removalRequired || details.disposalRequired)
-          ? details.removalCharges || 0
-          : 0,
-      repairs = serviceType === "Roof Repair" ? details.repairCharges || 0 : 0,
-      labor = details.laborCharges || 0,
-      additional = details.additionalCharges || 0;
-    return money(removal + repairs + labor + additional);
+    void booking;
+    void details;
+    void inspection;
+    return 0;
   };
   // Check private ownership before reporting field errors for another user's record.
   if (actor.role === "Foreman") {
@@ -552,13 +546,12 @@ export function apply(s, action, d, actor = {}) {
         i.items?.length && i.items.every((item) => Number(item.quantity) > 0),
         "Select materials and enter a positive quantity for each.",
       );
-      const charges = inspectionCharges(b, details, i),
-        total = money(
-          i.items.reduce(
-            (sum, item) => sum + inspectionMaterialAmount(item),
-            0,
-          ) + charges,
-        );
+      const total = money(
+        i.items.reduce(
+          (sum, item) => sum + inspectionMaterialAmount(item),
+          0,
+        ),
+      );
       need(
         total <= limits.amount,
         "Initial estimate exceeds the allowed amount.",
@@ -575,7 +568,7 @@ export function apply(s, action, d, actor = {}) {
           quantity,
           price,
         })),
-        charges,
+        charges: 0,
         total,
         downpayment: money(total * 0.3),
         status: "Initial Estimate",
@@ -665,10 +658,13 @@ export function apply(s, action, d, actor = {}) {
           price: m.price,
         };
       });
-      const charges = num(d.charges || 0, "Additional charges"),
-        total = money(
-          items.reduce((a, x) => a + x.quantity * x.price, 0) + charges,
+      if (actor.role === "Foreman" && Number(d.charges || 0) > 0)
+        deny(
+          false,
+          "Foremen can only submit the initial material estimate; labor and additional charges are admin-only.",
         );
+      const charges = 0,
+        total = money(items.reduce((a, x) => a + x.quantity * x.price, 0));
       need(
         total <= limits.amount,
         "Quotation total cannot exceed ₱1,000,000,000.",

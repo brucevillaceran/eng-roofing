@@ -485,10 +485,7 @@ export function validateAction(action, input, { state, user } = {}) {
           "damagedSheets",
           "repairType",
           "otherDamageType",
-          "removalCharges",
-          "laborCharges",
-          "repairCharges",
-          "additionalCharges",
+          "estimatedWorkers",
           "additionalWork",
         ];
         keys(d.details, allowed);
@@ -584,10 +581,11 @@ export function validateAction(action, input, { state, user } = {}) {
             "Number of damaged sheets",
             { min: 1, max: limits.quantity, decimals: 0 },
           ],
-          ["removalCharges", "Removal/disposal charges", { min: 0 }],
-          ["laborCharges", "Labor charges", { min: 0 }],
-          ["repairCharges", "Repair charges", { min: 0 }],
-          ["additionalCharges", "Additional charges", { min: 0 }],
+          [
+            "estimatedWorkers",
+            "Estimated number of workers",
+            { min: 1, max: 1000, decimals: 0 },
+          ],
         ])
           if (d.details[key] !== undefined && d.details[key] !== "")
             d.details[key] = numberValue(d.details[key], label, options);
