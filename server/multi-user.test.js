@@ -777,6 +777,15 @@ test("legacy booking linking and administrative corrections preserve history", a
   assert.equal(
     (await env.request("/api/track/legacy-token", { identity: users.client }))
       .status,
+    404,
+  );
+  await env.action(env.admin, "bookingDecision", {
+    id: "legacy",
+    status: "Approved",
+  });
+  assert.equal(
+    (await env.request("/api/track/legacy-token", { identity: users.client }))
+      .status,
     200,
   );
   const { p } = await project(env, users);
