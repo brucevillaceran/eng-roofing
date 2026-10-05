@@ -55,12 +55,21 @@ export function createApi(store) {
           q.bookingId === b.id &&
           !["Initial Estimate", "Under Review"].includes(q.status),
       );
+    const foreman = s.users.find((u) => u.id === project?.foremanId);
     res.json({
       booking: b,
       inspections: s.inspections.filter((i) => i.bookingId === b.id),
       quotation,
       project,
-      foreman: s.users.find((u) => u.id === project?.foremanId) || null,
+      foreman: foreman
+        ? {
+            id: foreman.id,
+            name: foreman.name,
+            role: foreman.role,
+            contact: foreman.contact || null,
+            photo: foreman.photo || null,
+          }
+        : null,
       tasks: s.tasks.filter((t) => t.projectId === project?.id),
       payments: s.payments.filter((p) => p.projectId === project?.id),
       feedback: s.feedback.find((f) => f.projectId === project?.id),

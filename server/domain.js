@@ -89,11 +89,12 @@ export function apply(s, action, d, actor = {}) {
     return p;
   };
   const notify = (role, title, message, userIds = []) => {
+    const validUserIds = userIds.filter((id) => typeof id === "string" && id);
     const recipients = s.users.filter(
       (u) =>
         u.active !== false &&
         u.role === role &&
-        (userIds.length ? userIds.includes(u.id) : role === "Admin"),
+        (validUserIds.length ? validUserIds.includes(u.id) : role === "Admin"),
     );
     for (const u of recipients)
       s.notifications.unshift({
@@ -116,6 +117,14 @@ export function apply(s, action, d, actor = {}) {
       createdAt: now(),
       status: "Local preview",
     });
+  const bookingApprovalEmail = (b) => {
+    const link = tracking(b);
+    return {
+      subject: "Your roofing booking has been approved",
+      message: `Your roofing booking has been approved. You can track your project using the link below.\n\nTrack My Project\n${link}`,
+      path: link,
+    };
+  };
   const event = (p, message) => {
     p.timeline.push({
       text: message,
@@ -299,13 +308,20 @@ export function apply(s, action, d, actor = {}) {
           d.foremanId,
         ]);
       }
-      notify("Client", "Booking update", `${b.id}: ${b.status}`, [b.clientId]);
-      email(
-        b,
-        "Booking update",
-        `Your booking ${b.id} is ${b.status.toLowerCase()}. Preferred schedule: ${b.date} at ${b.time}.`,
-        tracking(b),
-      );
+      if (b.clientId) {
+        notify("Client", "Booking update", `${b.id}: ${b.status}`, [b.clientId]);
+      }
+      if (d.status === "Approved") {
+        const approval = bookingApprovalEmail(b);
+        email(b, approval.subject, approval.message, approval.path);
+      } else {
+        email(
+          b,
+          "Booking update",
+          `Your booking ${b.id} is ${b.status.toLowerCase()}. Preferred schedule: ${b.date} at ${b.time}.`,
+          tracking(b),
+        );
+      }
       break;
     }
     case "inspection": {

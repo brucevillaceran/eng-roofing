@@ -4562,7 +4562,10 @@ function PublicPage({ initial }) {
         <div className="public-form card">
           <div className="eyebrow">LET’S BUILD SOMETHING LASTING</div>
           <h1>Book a Roofing Service</h1>
-          <p>Sign in to your client account. A better roof starts here.</p>
+          <p>
+            No account needed. Share your project details and we’ll contact you
+            with the next steps.
+          </p>
           {success ? (
             <div className="success-panel">
               <CheckCircle2 size={44} />

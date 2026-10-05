@@ -234,6 +234,30 @@ test("guest booking is accepted without creating a client account and keeps a tr
   assert.ok(typeof b.token === "string" && b.token.length > 16);
   assert.equal(s.users.some((u) => u.role === "Client" && u.email === "guest@example.test"), false);
 });
+test("admin approval emails guests using their saved booking email and track link", () => {
+  const s = seed();
+  const result = domainApply(s, "book", {
+    name: "Guest Approval Client",
+    email: "guest-approval@example.test",
+    phone: "09170000000",
+    address: "Approval test site",
+    date: "2099-11-11",
+    time: "10:00",
+    service: "Roof Repair",
+    type: "Residential",
+    description: "Approval email test",
+  });
+  const b = s.bookings.find((booking) => booking.id === result.id);
+  apply(s, "booking", { id: b.id, status: "Approved" }, { id: "USR-1", role: "Admin" });
+  const mail = s.emails.find(
+    (entry) => entry.to === "guest-approval@example.test" && entry.path.includes(b.token),
+  );
+  assert.ok(mail);
+  assert.match(mail.subject, /approved/i);
+  assert.match(mail.message, /Your roofing booking has been approved/i);
+  assert.match(mail.message, /Track My Project/i);
+  assert.match(mail.message, new RegExp(`/track/${b.token}`));
+});
 test("prices are snapshots; admin changes quantities without replacing saved prices", () => {
   const s = seed(),
     { q } = estimate(s);
