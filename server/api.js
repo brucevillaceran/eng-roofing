@@ -1,6 +1,6 @@
 import { identifier, ValidationError } from "../shared/validation.js";
 import express from "express";
-import { apply, balance } from "./domain.js";
+import { apply, balance, bookingCanBeTracked } from "./domain.js";
 import { configureAuth, authenticated, authorizeSession } from "./auth.js";
 import { visibleState } from "./access.js";
 export function createApi(store) {
@@ -45,10 +45,14 @@ export function createApi(store) {
       : await store.read();
     const b = s.bookings.find((b) => b.token === req.params.token);
     if (!b) return res.status(404).json({ error: "Booking not found." });
+    if (!bookingCanBeTracked(b))
+      return res.status(404).json({ error: "Booking not found." });
     if (req.user && !["Admin", "Client"].includes(req.user.role))
       return res.status(404).json({ error: "Booking not found." });
     if (req.user && req.user.role === "Client" && b.clientId !== req.user.id)
-      return res.status(404).json({ error: "Booking not found in your account." });
+      return res
+        .status(404)
+        .json({ error: "Booking not found in your account." });
     const project = s.projects.find((p) => p.bookingId === b.id),
       quotation = s.quotations.find(
         (q) =>

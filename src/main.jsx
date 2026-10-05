@@ -177,7 +177,7 @@ const allowed = {
 function Badge({ children }) {
   return (
     <span
-      className={`badge ${["Ongoing", "Approved", "Completed", "Fully Paid", "Active", "Paid"].includes(children) ? "green" : ["Pending", "Awaiting Client", "Initial Estimate", "Partially Paid", "Scheduled", "For Inspection", "Rescheduled"].includes(children) ? "amber" : ["Rejected", "Cancelled", "Unpaid", "On Hold", "Disabled"].includes(children) ? "red" : "gray"}`}
+      className={`badge ${["Ongoing", "Approved", "Completed", "Fully Paid", "Active", "Paid"].includes(children) ? "green" : ["Pending", "Awaiting Assignment", "Awaiting Client", "Initial Estimate", "Partially Paid", "Scheduled", "For Inspection", "Rescheduled"].includes(children) ? "amber" : ["Rejected", "Cancelled", "Unpaid", "On Hold", "Disabled"].includes(children) ? "red" : "gray"}`}
     >
       <i />
       {children}
@@ -1763,14 +1763,22 @@ function ModulePage({ page }) {
                     <Badge>{b.status}</Badge>,
                     <Button
                       variant="small secondary"
+                      disabled={user.role !== "Admin" && !b.token}
                       onClick={() =>
                         user.role === "Admin"
                           ? setModal({ type: "booking", record: b })
-                          : window.open(`/track/${b.token}`, "_blank")
+                          : b.token &&
+                            window.open(`/track/${b.token}`, "_blank")
                       }
                     >
-                      {user.role === "Admin" ? "Review" : "Track"}
-                      <ArrowRight size={13} />
+                      {user.role === "Admin"
+                        ? "Review"
+                        : b.token
+                          ? "Track"
+                          : b.status === "Rejected"
+                            ? "Rejected"
+                            : "Awaiting approval"}
+                      {b.token && <ArrowRight size={13} />}
                     </Button>,
                   ])}
               />
@@ -1877,6 +1885,11 @@ function ModulePage({ page }) {
                       i.foremanId === user.id,
                   )
                   .filter((i) =>
+                    ["Approved", "For Inspection", "Completed"].includes(
+                      s.bookings.find((b) => b.id === i.bookingId)?.status,
+                    ),
+                  )
+                  .filter((i) =>
                     matches({
                       ...i,
                       booking: s.bookings.find((b) => b.id === i.bookingId),
@@ -1887,7 +1900,8 @@ function ModulePage({ page }) {
                     return [
                       <Name name={i.id} sub={b.id} />,
                       <Name name={b.name} sub={b.service} />,
-                      s.users.find((u) => u.id === i.foremanId)?.name,
+                      s.users.find((u) => u.id === i.foremanId)?.name ||
+                        "Unassigned",
                       day(i.date),
                       <Badge>{i.status}</Badge>,
                       <div className="row-actions">
@@ -1897,7 +1911,11 @@ function ModulePage({ page }) {
                             setModal({ type: "inspection", record: i })
                           }
                         >
-                          {user.role === "Client" ? "View" : "Inspect"}
+                          {user.role === "Client"
+                            ? "View"
+                            : user.role === "Admin" && !i.foremanId
+                              ? "Assign inspector"
+                              : "Inspect"}
                         </Button>
                         {user.role !== "Client" &&
                           i.status === "Completed" &&
@@ -2501,7 +2519,8 @@ function ModalContent({ modal }) {
     [chosen, setChosen] = useState(r?.employeeIds || []),
     [checks, setChecks] = useState(r?.accessories || []),
     [photos, setPhotos] = useState(r?.photo ? [r.photo] : r?.photos || []),
-    [bookingService, setBookingService] = useState(r?.service || services[0]);
+    [bookingService, setBookingService] = useState(r?.service || services[0]),
+    [decisionError, setDecisionError] = useState("");
   let content,
     title,
     subtitle,
@@ -2531,10 +2550,11 @@ function ModalContent({ modal }) {
           <CheckCircle2 size={44} />
           <h3>Booking {r.id}</h3>
           <p>Submitted {stamp(r.submitted_at)}</p>
-          <p>Save your private tracking link to follow the next steps.</p>
-          <a className="btn" href={`/track/${r.token}`}>
-            Track my booking <ArrowRight size={16} />
-          </a>
+          <Badge>Pending</Badge>
+          <p>
+            Your request is awaiting review. Tracking access will be provided
+            only if the booking is approved.
+          </p>
           <p className="muted">
             View booking updates in your Notifications portal.
           </p>
@@ -2542,6 +2562,12 @@ function ModalContent({ modal }) {
       </Modal>
     );
   if (modal.type === "booking") {
+    const decide = (status) => {
+      setDecisionError("");
+      act("bookingDecision", { id: r.id, status }).catch((error) =>
+        setDecisionError(error.message),
+      );
+    };
     title = "Review roofing booking";
     subtitle = `${r.id} · Submitted ${stamp(r.submitted_at)}`;
     content = (
@@ -2557,6 +2583,26 @@ function ModalContent({ modal }) {
           <Badge>{r.status}</Badge>
           {r.releasedAt && <p>Released {stamp(r.releasedAt)}</p>}
         </div>
+        <div className="info full">
+          <b>Service:</b> {r.service} · {r.type}
+          <br />
+          <b>Preferred schedule:</b> {day(r.date)} at {r.time}
+          <br />
+          <b>Site address:</b> {r.address}
+          <br />
+          <b>Roofing concern:</b> {r.description || "Not provided"}
+        </div>
+        {decisionError && <div className="error">{decisionError}</div>}
+        {user.role === "Admin" && r.status === "Pending" && (
+          <div className="form-footer">
+            <Button onClick={() => decide("Approved")}>
+              <Check size={15} /> Approve booking
+            </Button>
+            <Button variant="secondary" onClick={() => decide("Rejected")}>
+              Reject booking
+            </Button>
+          </div>
+        )}
         {!r.clientId && (
           <Form
             onSubmit={(d) => act("bookingOwner", { ...d, id: r.id })}
@@ -2585,20 +2631,6 @@ function ModalContent({ modal }) {
             required
           />
           <Field
-            label="Status"
-            name="status"
-            value={r.status}
-            options={[
-              "Pending",
-              "Approved",
-              "Rejected",
-              "Rescheduled",
-              "For Inspection",
-              "Completed",
-              "Cancelled",
-            ]}
-          />
-          <Field
             label="Preferred date"
             name="date"
             type="date"
@@ -2613,26 +2645,6 @@ function ModalContent({ modal }) {
             required
           />
           <Field
-            label="Inspection date"
-            name="inspectionDate"
-            type="date"
-            value={r.date}
-          />
-          <Field
-            label="Assign inspector / foreman"
-            name="foremanId"
-            value={
-              s.inspections.find((i) => i.bookingId === r.id)?.foremanId || ""
-            }
-            options={s.users
-              .filter((u) => u.role === "Foreman")
-              .map((u) => ({ value: u.id, label: u.name }))}
-          />
-          <div className="info full">
-            Select “For Inspection” to create an assigned site inspection.{" "}
-            {r.service} · {r.type}
-          </div>
-          <Field
             label="Roofing concern"
             name="description"
             type="textarea"
@@ -2640,9 +2652,16 @@ function ModalContent({ modal }) {
           />
           <PhotoList photos={r.photos} />
         </Form>
-        <a className="text-button" href={`/track/${r.token}`} target="_blank">
-          Open client tracking <ExternalLink size={14} />
-        </a>
+        {r.token &&
+          ["Approved", "For Inspection", "Completed"].includes(r.status) && (
+            <a
+              className="text-button"
+              href={`/track/${r.token}`}
+              target="_blank"
+            >
+              Open client tracking <ExternalLink size={14} />
+            </a>
+          )}
       </>
     );
   }
@@ -2665,144 +2684,180 @@ function ModalContent({ modal }) {
         </Modal>
       );
     const frozen = s.quotations.some((q) => q.inspectionId === r.id);
+    const assigned = !!r.foremanId;
     content = (
       <>
         <div className="info">
           <MapPin size={17} />
           {b.address}
         </div>
-        <Form
-          onSubmit={(d) =>
-            act("inspection", { ...d, id: r.id, accessories: checks, photos })
-          }
-          submit="Complete inspection"
-          disabled={frozen}
-        >
-          <Field
-            label="Results shared with the client"
-            name="clientNotes"
-            type="textarea"
-            value={r.clientNotes}
-            disabled={frozen}
-          />
-          <Field
-            label="Inspection date"
-            max={today()}
-            name="date"
-            type="date"
-            value={r.date}
-            required
-            disabled={frozen}
-          />
-          <Field
-            label="Roof area (SQM)"
-            name="area"
-            type="number"
-            step="0.01"
-            min="0.01"
-            value={r.area}
-            required
-            disabled={frozen}
-          />
-          <Field
-            label="Linear measurement (LM)"
-            name="linear"
-            type="number"
-            step="0.01"
-            min="0"
-            value={r.linear}
-            required
-            disabled={frozen}
-          />
-          <Field
-            label="Roof type / profile"
-            name="profile"
-            options={profiles}
-            value={r.profile}
-            required
-            disabled={frozen}
-          />
-          <Field
-            label="Roof complexity"
-            name="complexity"
-            options={["Simple", "Moderate", "Complex"]}
-            value={r.complexity}
-            disabled={frozen}
-          />
-          <Field
-            label="Number of roof sections"
-            name="sections"
-            type="number"
-            min="1"
-            step="1"
-            value={r.sections}
-            required
-            disabled={frozen}
-          />
-          <Field
-            label={
-              b.service === "Roof Installation"
-                ? "Supporting structure condition"
-                : "Existing roof condition"
+        {user.role === "Admin" && !frozen && r.status !== "Completed" && (
+          <Form
+            onSubmit={(d) => act("inspectionAssign", { ...d, id: r.id })}
+            submit={assigned ? "Update inspector" : "Assign inspector"}
+          >
+            <Field
+              label="Inspector"
+              name="foremanId"
+              value={r.foremanId || ""}
+              options={s.users
+                .filter((u) => u.role === "Foreman" && u.active !== false)
+                .map((u) => ({ value: u.id, label: u.name }))}
+              required
+            />
+            <Field
+              label="Inspection date"
+              name="date"
+              type="date"
+              min={today()}
+              value={r.date || b.date}
+              required
+            />
+          </Form>
+        )}
+        {assigned ? (
+          <Form
+            onSubmit={(d) =>
+              act("inspection", { ...d, id: r.id, accessories: checks, photos })
             }
-            name="condition"
-            options={
-              b.service === "Roof Installation"
-                ? [
-                    "New / No Existing Structure",
-                    "Good",
-                    "Fair",
-                    "Needs Repair",
-                    "Requires Further Assessment",
-                  ]
-                : [
-                    "Good",
-                    "Fair",
-                    "Damaged",
-                    "Severely Damaged",
-                    "Requires Further Assessment",
-                  ]
-            }
-            value={r.condition}
-            required
+            submit="Complete inspection"
             disabled={frozen}
-          />
-          <div className="full">
-            <h4>Required accessories</h4>
-            <div className="checkbox-grid">
-              {accessories.map((a) => (
-                <label key={a}>
-                  <input
-                    type="checkbox"
-                    disabled={frozen}
-                    checked={checks.includes(a)}
-                    onChange={(e) =>
-                      setChecks(
-                        e.target.checked
-                          ? [...checks, a]
-                          : checks.filter((x) => x !== a),
-                      )
-                    }
-                  />
-                  {a}
-                </label>
-              ))}
+          >
+            <Field
+              label="Results shared with the client"
+              name="clientNotes"
+              type="textarea"
+              value={r.clientNotes}
+              disabled={frozen}
+            />
+            <Field
+              label="Inspection date"
+              max={today()}
+              name="date"
+              type="date"
+              value={r.date}
+              required
+              disabled={frozen}
+            />
+            <Field
+              label="Roof area (SQM)"
+              name="area"
+              type="number"
+              step="0.01"
+              min="0.01"
+              value={r.area}
+              required
+              disabled={frozen}
+            />
+            <Field
+              label="Linear measurement (LM)"
+              name="linear"
+              type="number"
+              step="0.01"
+              min="0"
+              value={r.linear}
+              required
+              disabled={frozen}
+            />
+            <Field
+              label="Roof type / profile"
+              name="profile"
+              options={profiles}
+              value={r.profile}
+              required
+              disabled={frozen}
+            />
+            <Field
+              label="Roof complexity"
+              name="complexity"
+              options={["Simple", "Moderate", "Complex"]}
+              value={r.complexity}
+              disabled={frozen}
+            />
+            <Field
+              label="Number of roof sections"
+              name="sections"
+              type="number"
+              min="1"
+              step="1"
+              value={r.sections}
+              required
+              disabled={frozen}
+            />
+            <Field
+              label={
+                b.service === "Roof Installation"
+                  ? "Supporting structure condition"
+                  : "Existing roof condition"
+              }
+              name="condition"
+              options={
+                b.service === "Roof Installation"
+                  ? [
+                      "New / No Existing Structure",
+                      "Good",
+                      "Fair",
+                      "Needs Repair",
+                      "Requires Further Assessment",
+                    ]
+                  : [
+                      "Good",
+                      "Fair",
+                      "Damaged",
+                      "Severely Damaged",
+                      "Requires Further Assessment",
+                    ]
+              }
+              value={r.condition}
+              required
+              disabled={frozen}
+            />
+            <div className="full">
+              <h4>Required accessories</h4>
+              <div className="checkbox-grid">
+                {accessories.map((a) => (
+                  <label key={a}>
+                    <input
+                      type="checkbox"
+                      disabled={frozen}
+                      checked={checks.includes(a)}
+                      onChange={(e) =>
+                        setChecks(
+                          e.target.checked
+                            ? [...checks, a]
+                            : checks.filter((x) => x !== a),
+                        )
+                      }
+                    />
+                    {a}
+                  </label>
+                ))}
+              </div>
             </div>
+            <Field
+              label="Site notes / roof sections"
+              name="notes"
+              type="textarea"
+              value={r.notes}
+              disabled={frozen}
+            />
+            <PhotoUpload
+              photos={photos}
+              onChange={setPhotos}
+              disabled={frozen}
+            />
+            {frozen && (
+              <div className="info full">
+                This inspection is preserved because an estimate has been
+                created.
+              </div>
+            )}
+          </Form>
+        ) : (
+          <div className="info">
+            Assign an inspector before the site inspection can be completed.
           </div>
-          <Field
-            label="Site notes / roof sections"
-            name="notes"
-            type="textarea"
-            value={r.notes}
-            disabled={frozen}
-          />
-          <PhotoUpload photos={photos} onChange={setPhotos} disabled={frozen} />
-          {frozen && (
-            <div className="info full">
-              This inspection is preserved because an estimate has been created.
-            </div>
-          )}
-        </Form>
+        )}
       </>
     );
   }
@@ -4569,15 +4624,14 @@ function PublicPage({ initial }) {
           {success ? (
             <div className="success-panel">
               <CheckCircle2 size={44} />
-              <h3>Your booking is confirmed</h3>
+              <h3>Your booking request was received</h3>
               <b>{success.id}</b>
               <p>Submitted {stamp(success.submitted_at)}</p>
-              <a className="btn" href={`/track/${success.token}`}>
-                Track my booking <ArrowRight size={16} />
-              </a>
               <p>
-                Your confirmation email is available in the local preview inbox.
+                Your request is pending review. If approved, a Track My Project
+                link will be sent to the email address you provided.
               </p>
+              <p>Your confirmation is available in the local email outbox.</p>
             </div>
           ) : (
             <BookingForm onDone={setSuccess} />

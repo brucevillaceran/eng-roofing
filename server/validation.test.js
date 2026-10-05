@@ -340,11 +340,14 @@ test("real workflow API validates every input category, foreign IDs, and rejecte
   ])
     await env.action("book", { ...book, ...patch }, 400, client);
   const b = await env.action("book", book, 200, client);
-  await env.action("booking", {
-    id: b.id,
-    status: "For Inspection",
+  await env.action("bookingDecision", { id: b.id, status: "Approved" });
+  const pendingInspection = (await env.store.read()).inspections.find(
+    (i) => i.bookingId === b.id,
+  );
+  await env.action("inspectionAssign", {
+    id: pendingInspection.id,
     foremanId: foreman.id,
-    inspectionDate: today(),
+    date: today(),
   });
   const inspection = (await env.store.read()).inspections[0];
   const survey = {
@@ -417,7 +420,11 @@ test("real workflow API validates every input category, foreign IDs, and rejecte
   assert.equal((await env.store.read()).quotations[0].downpayment, 45.75);
   await env.action(
     "quoteDecision",
-    { id: q.id, token: b.token, status: "Approved" },
+    {
+      id: q.id,
+      token: (await env.store.read()).bookings.find((x) => x.id === b.id).token,
+      status: "Approved",
+    },
     200,
     client,
   );

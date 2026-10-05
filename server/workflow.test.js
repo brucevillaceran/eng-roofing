@@ -56,14 +56,20 @@ const booking = () => ({
   description: "Leaking roof",
 });
 function estimate(s) {
-  const b = apply(s, "book", booking());
+  const result = apply(s, "book", booking());
+  const b = s.bookings.find((booking) => booking.id === result.id);
+  apply(s, "bookingDecision", { id: b.id, status: "Approved" }, admin);
+  const i = s.inspections.find((i) => i.bookingId === b.id);
   apply(
     s,
-    "booking",
-    { id: b.id, status: "For Inspection", foremanId: "USR-2" },
+    "inspectionAssign",
+    {
+      id: i.id,
+      foremanId: "USR-2",
+      date: new Date().toISOString().slice(0, 10),
+    },
     admin,
   );
-  const i = s.inspections.find((i) => i.bookingId === b.id);
   apply(
     s,
     "inspection",
@@ -196,8 +202,10 @@ test("complete booking → inspection → quote → project → payment → feed
 });
 test("booking timestamps, token uniqueness, validation and role permissions", () => {
   const s = seed(),
-    a = apply(s, "book", booking()),
-    b = apply(s, "book", booking());
+    aResult = apply(s, "book", booking()),
+    bResult = apply(s, "book", booking()),
+    a = s.bookings.find((x) => x.id === aResult.id),
+    b = s.bookings.find((x) => x.id === bResult.id);
   assert.notEqual(a.token, b.token);
   assert.ok(!isNaN(Date.parse(a.submitted_at)));
   assert.throws(
@@ -205,7 +213,8 @@ test("booking timestamps, token uniqueness, validation and role permissions", ()
     /Preferred date/,
   );
   assert.throws(
-    () => apply(s, "booking", { id: a.id, status: "Approved" }, employee),
+    () =>
+      apply(s, "bookingDecision", { id: a.id, status: "Approved" }, employee),
     /role/,
   );
   assert.throws(
@@ -229,10 +238,18 @@ test("guest booking is accepted without creating a client account and keeps a tr
   });
   const b = s.bookings.at(-1);
   assert.equal(result.id, b.id);
+  assert.equal(result.token, undefined);
   assert.equal(b.status, "Pending");
   assert.equal(b.clientId, undefined);
   assert.ok(typeof b.token === "string" && b.token.length > 16);
-  assert.equal(s.users.some((u) => u.role === "Client" && u.email === "guest@example.test"), false);
+  assert.equal(s.emails.at(-1).path, undefined);
+  assert.equal(s.emails.at(-1).message.includes(b.token), false);
+  assert.equal(
+    s.users.some(
+      (u) => u.role === "Client" && u.email === "guest@example.test",
+    ),
+    false,
+  );
 });
 test("admin approval emails guests using their saved booking email and track link", () => {
   const s = seed();
@@ -248,15 +265,107 @@ test("admin approval emails guests using their saved booking email and track lin
     description: "Approval email test",
   });
   const b = s.bookings.find((booking) => booking.id === result.id);
-  apply(s, "booking", { id: b.id, status: "Approved" }, { id: "USR-1", role: "Admin" });
+  assert.equal(result.token, undefined);
+  apply(s, "bookingDecision", { id: b.id, status: "Approved" }, admin);
   const mail = s.emails.find(
-    (entry) => entry.to === "guest-approval@example.test" && entry.path.includes(b.token),
+    (entry) =>
+      entry.to === "guest-approval@example.test" &&
+      entry.path.includes(b.token),
   );
   assert.ok(mail);
+  assert.equal(b.status, "Approved");
+  assert.equal(
+    s.inspections.find((i) => i.bookingId === b.id).status,
+    "Awaiting Assignment",
+  );
   assert.match(mail.subject, /approved/i);
   assert.match(mail.message, /Your roofing booking has been approved/i);
+  assert.match(mail.message, /Approval test site/);
   assert.match(mail.message, /Track My Project/i);
   assert.match(mail.message, new RegExp(`/track/${b.token}`));
+});
+test("admin rejection sends no tracking link and never creates an inspection", () => {
+  const s = seed();
+  const result = domainApply(s, "book", {
+    name: "Guest Rejection Client",
+    email: "guest-rejection@example.test",
+    phone: "09170000000",
+    address: "Rejection test site",
+    date: "2099-11-11",
+    time: "10:00",
+    service: "Roof Repair",
+    type: "Residential",
+    description: "Rejection email test",
+  });
+  const b = s.bookings.find((booking) => booking.id === result.id);
+  apply(s, "bookingDecision", { id: b.id, status: "Rejected" }, admin);
+  const mail = s.emails.find((entry) => entry.to === b.email);
+  assert.equal(b.status, "Rejected");
+  assert.equal(mail.path, undefined);
+  assert.match(mail.subject, /rejected/i);
+  assert.match(mail.message, /rejected/i);
+  assert.equal(mail.message.includes(b.token), false);
+  assert.equal(
+    s.inspections.some((i) => i.bookingId === b.id),
+    false,
+  );
+  assert.throws(
+    () => apply(s, "bookingDecision", { id: b.id, status: "Approved" }, admin),
+    /pending bookings/,
+  );
+});
+test("pending bookings cannot be assigned or inspected through direct actions", () => {
+  const s = seed();
+  const result = domainApply(s, "book", {
+    name: "Pending Workflow Client",
+    email: "pending-workflow@example.test",
+    phone: "09170000000",
+    address: "Pending workflow site",
+    date: "2099-11-11",
+    time: "10:00",
+    service: "Roof Repair",
+    type: "Residential",
+    description: "Pending inspection restriction",
+  });
+  const b = s.bookings.find((booking) => booking.id === result.id);
+  const i = {
+    id: "IN-PENDING-WORKFLOW",
+    bookingId: b.id,
+    foremanId: foreman.id,
+    date: b.date,
+    status: "Scheduled",
+  };
+  s.inspections.push(i);
+  assert.throws(
+    () =>
+      apply(
+        s,
+        "inspectionAssign",
+        { id: i.id, foremanId: foreman.id, date: "2099-11-11" },
+        admin,
+      ),
+    /approved bookings/,
+  );
+  assert.throws(
+    () =>
+      apply(
+        s,
+        "inspection",
+        {
+          id: i.id,
+          date: new Date().toISOString().slice(0, 10),
+          area: 100,
+          linear: 30,
+          sections: 2,
+          profile: "Rib-Type / Ribbed",
+          complexity: "Simple",
+          condition: "Damaged",
+          accessories: [],
+        },
+        foreman,
+      ),
+    /approved bookings/,
+  );
 });
 test("prices are snapshots; admin changes quantities without replacing saved prices", () => {
   const s = seed(),
@@ -292,7 +401,8 @@ test("prices are snapshots; admin changes quantities without replacing saved pri
 test("client cannot approve a quotation using a different booking", () => {
   const s = seed(),
     { b, q } = estimate(s),
-    other = apply(s, "book", booking());
+    otherReceipt = apply(s, "book", booking()),
+    other = s.bookings.find((booking) => booking.id === otherReceipt.id);
   apply(s, "finalize", { id: q.id }, admin);
   assert.throws(
     () =>
@@ -516,10 +626,11 @@ test("MySQL round trip and atomic transaction rollback", async () => {
   const store = await createStore(":memory:", { sample: true }),
     s = await store.read();
   const b = apply(s, "book", booking());
+  const savedBooking = s.bookings.find((x) => x.id === b.id);
   await store.save(s);
   assert.equal(
     (await store.read()).bookings.find((x) => x.id === b.id).token,
-    b.token,
+    savedBooking.token,
   );
   const invalid = await store.read();
   invalid.bookings.push(invalid.bookings[0]);

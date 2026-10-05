@@ -143,18 +143,25 @@ const booking = {
   description: "Roof repair",
 };
 async function project(env, users) {
-  const b = await env.action(users.client, "book", {
+  const receipt = await env.action(users.client, "book", {
     ...booking,
     clientId: users.client2.user.id,
     email: users.client2.user.email,
   });
-  await env.action(env.admin, "booking", {
-    id: b.id,
-    status: "For Inspection",
-    foremanId: users.foreman.user.id,
+  await env.action(env.admin, "bookingDecision", {
+    id: receipt.id,
+    status: "Approved",
   });
   const i = (await env.store.read()).inspections.find(
-    (i) => i.bookingId === b.id,
+    (i) => i.bookingId === receipt.id,
+  );
+  await env.action(env.admin, "inspectionAssign", {
+    id: i.id,
+    foremanId: users.foreman.user.id,
+    date: new Date().toISOString().slice(0, 10),
+  });
+  const b = (await env.store.read()).bookings.find(
+    (booking) => booking.id === receipt.id,
   );
   await env.action(users.foreman, "inspection", {
     id: i.id,

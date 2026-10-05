@@ -1,27 +1,37 @@
 import { safeUser } from "./auth.js";
+import { bookingCanBeTracked } from "./domain.js";
 export function visibleState(s, user) {
   const admin = user.role === "Admin",
     client = user.role === "Client",
-    foreman = user.role === "Foreman";
+    foreman = user.role === "Foreman",
+    bookingById = new Map(s.bookings.map((b) => [b.id, b])),
+    activeBooking = (id) => {
+      const booking = bookingById.get(id);
+      return booking && !["Pending", "Rejected"].includes(booking.status);
+    };
   const projects = s.projects.filter(
     (p) =>
       admin ||
-      (client
-        ? s.bookings.some((b) => b.id === p.bookingId && b.clientId === user.id)
-        : foreman
-          ? p.foremanId === user.id
-          : p.employeeIds.includes(user.id)),
+      (activeBooking(p.bookingId) &&
+        (client
+          ? s.bookings.some(
+              (b) => b.id === p.bookingId && b.clientId === user.id,
+            )
+          : foreman
+            ? p.foremanId === user.id
+            : p.employeeIds.includes(user.id))),
   );
   const projectIds = new Set(projects.map((p) => p.id));
   const inspections = s.inspections.filter(
     (i) =>
-      admin ||
-      (foreman
-        ? i.foremanId === user.id
-        : client &&
-          s.bookings.some(
-            (b) => b.id === i.bookingId && b.clientId === user.id,
-          )),
+      bookingCanBeTracked(bookingById.get(i.bookingId)) &&
+      (admin ||
+        (foreman
+          ? i.foremanId === user.id
+          : client &&
+            s.bookings.some(
+              (b) => b.id === i.bookingId && b.clientId === user.id,
+            ))),
   );
   const bookingIds = new Set([
     ...projects.map((p) => p.bookingId),
@@ -68,7 +78,11 @@ export function visibleState(s, user) {
     ...empty,
     users,
     bookings: bookings.map((b) =>
-      client || admin ? b : (({ token, ...rest }) => rest)(b),
+      admin
+        ? b
+        : client && bookingCanBeTracked(b)
+          ? b
+          : (({ token, ...rest }) => rest)(b),
     ),
     inspections: client
       ? inspections.map(

@@ -232,6 +232,8 @@ export const actionRoles = {
   book: ["Admin", "Client"],
   bookingOwner: ["Admin"],
   booking: ["Admin"],
+  bookingDecision: ["Admin"],
+  inspectionAssign: ["Admin"],
   inspection: ["Admin", "Foreman"],
   estimate: ["Admin", "Foreman"],
   finalize: ["Admin"],
@@ -261,8 +263,9 @@ export const actionRoles = {
 const schemas = {
   book: "clientId name email phone address date time service type description photos",
   bookingOwner: "id clientId",
-  booking:
-    "id name phone address description status date time inspectionDate foremanId",
+  booking: "id name phone address description date time",
+  bookingDecision: "id status",
+  inspectionAssign: "id foremanId date",
   inspection:
     "id date area linear sections profile complexity condition accessories notes clientNotes photos",
   estimate: "inspectionId items charges notes",
@@ -361,23 +364,14 @@ export function validateAction(action, input, { state, user } = {}) {
       ]);
       break;
     case "booking":
-      select("status", "Booking status", [
-        "Pending",
-        "Approved",
-        "Rejected",
-        "Rescheduled",
-        "For Inspection",
-        "Completed",
-        "Cancelled",
-      ]);
-      if (has("date"))
-        date(
-          "date",
-          "Preferred date",
-          d.status === "Rescheduled" ? { min: today() } : {},
-        );
+      if (has("date")) date("date", "Preferred date");
       if (has("time")) d.time = timeValue(d.time, "Preferred time");
-      if (d.inspectionDate) date("inspectionDate", "Inspection date");
+      break;
+    case "bookingDecision":
+      select("status", "Booking decision", ["Approved", "Rejected"]);
+      break;
+    case "inspectionAssign":
+      date("date", "Inspection date", { min: today() });
       break;
     case "inspection":
       date("date", "Inspection date", { max: today() });
@@ -649,6 +643,8 @@ export function validateAction(action, input, { state, user } = {}) {
     const idTable = {
       bookingOwner: "bookings",
       booking: "bookings",
+      bookingDecision: "bookings",
+      inspectionAssign: "inspections",
       inspection: "inspections",
       finalize: "quotations",
       quoteDecision: "quotations",

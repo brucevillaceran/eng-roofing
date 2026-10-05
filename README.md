@@ -4,6 +4,10 @@
 
 React + Vite frontend, Node.js + Express backend, **MySQL/MariaDB via mysql2 connection pooling**, Recharts, and face-api.js. The red UI, four roles (**Admin, Foreman, Employee, Client**), APIs, calculations, and workflow are preserved. SQLite is no longer the active application database.
 
+## Booking approval and tracking
+
+Guest and Client booking requests start as **Pending**. Admin reviews the submitted details and explicitly approves or rejects each request. A pending request has no client-visible tracking link; the server denies tracking for pending and rejected bookings even if a token is known. Approval creates an unassigned Site Inspection item and adds a Track My Project link to the local email outbox for the submitted contact email. Admin assigns an active Foreman from Site Inspections before the inspection can be completed and quoted. Rejections are recorded in the same outbox without a tracking link. Registered Clients continue to manage their work from the authenticated portal.
+
 ## XAMPP / phpMyAdmin setup
 
 Requires **Node.js 24+**, npm, and MySQL 8+ or MariaDB 10.4+ (verified with MariaDB 10.11.18). XAMPP supplies Apache, PHP, and MySQL/MariaDB; Node still runs ENG Roofing.

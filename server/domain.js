@@ -39,6 +39,11 @@ const num = (value, label, min = 0) => numberValue(value, label, { min });
 const money = (n) => Math.round(n * 100) / 100;
 const date = (value, label) => dateValue(value, label);
 const text = (value, label) => textValue(value, label);
+export const bookingCanBeTracked = (booking) =>
+  Boolean(
+    booking &&
+    ["Approved", "For Inspection", "Completed"].includes(booking.status),
+  );
 export const balance = (s, p) =>
   money(
     s.quotations.find((q) => q.id === p.quotationId).total -
@@ -121,7 +126,7 @@ export function apply(s, action, d, actor = {}) {
     const link = tracking(b);
     return {
       subject: "Your roofing booking has been approved",
-      message: `Your roofing booking has been approved. You can track your project using the link below.\n\nTrack My Project\n${link}`,
+      message: `Your roofing booking has been approved.\n\nBooking details\nReference: ${b.id}\nName: ${b.name}\nContact: ${b.phone}\nService: ${b.service}\nProject type: ${b.type}\nSite address: ${b.address}\nPreferred schedule: ${b.date} at ${b.time}\n\nTrack My Project\n${link}`,
       path: link,
     };
   };
@@ -184,7 +189,9 @@ export function apply(s, action, d, actor = {}) {
           "Choose an active client account.",
         );
       }
-      const name = guest ? personName(d.name, "Client name") : personName(owner.name, "Client name"),
+      const name = guest
+          ? personName(d.name, "Client name")
+          : personName(owner.name, "Client name"),
         emailAddress = guest ? validEmail(d.email) : validEmail(owner.email);
       need(
         /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailAddress),
@@ -218,16 +225,15 @@ export function apply(s, action, d, actor = {}) {
       s.bookings.push(b);
       email(
         b,
-        "Your roofing booking is confirmed",
-        `Thank you, ${b.name}. Your reference is ${b.id}. We will review your preferred schedule.`,
-        tracking(b),
+        "Your roofing booking request was received",
+        `Thank you, ${b.name}. Your request ${b.id} is pending review. We will contact you after it has been reviewed.`,
       );
       notify(
         "Admin",
         "New roofing booking",
         `${b.name} requested ${b.service.toLowerCase()}.`,
       );
-      result = { id: b.id, token: b.token, submitted_at: b.submitted_at };
+      result = { id: b.id, submitted_at: b.submitted_at };
       break;
     }
     case "bookingOwner": {
@@ -255,45 +261,32 @@ export function apply(s, action, d, actor = {}) {
         !s.quotations.some((q) => q.bookingId === b.id),
         "A quotation exists; booking details are preserved.",
       );
-      need(
-        [
-          "Pending",
-          "Approved",
-          "Rejected",
-          "Rescheduled",
-          "For Inspection",
-          "Completed",
-          "Cancelled",
-        ].includes(d.status),
-        "Invalid booking status.",
-      );
       Object.assign(b, {
         name: text(d.name || b.name, "Name"),
         phone: d.phone || b.phone,
         address: text(d.address || b.address, "Address"),
         description: d.description ?? b.description,
-        status: d.status,
         date: date(d.date || b.date, "Preferred date"),
         time: d.time || b.time,
       });
-      if (d.status === "For Inspection") {
-        need(
-          get("users", d.foremanId).role === "Foreman" &&
-            get("users", d.foremanId).active !== false,
-          "Assign an active foreman.",
-        );
-        const existing = s.inspections.find((i) => i.bookingId === b.id);
-        const values = {
-          bookingId: b.id,
-          foremanId: d.foremanId,
-          date: date(d.inspectionDate || b.date, "Inspection date"),
-          status: "Scheduled",
-        };
-        if (existing) Object.assign(existing, values);
-        else
+      break;
+    }
+    case "bookingDecision": {
+      permit("Admin");
+      const b = get("bookings", d.id);
+      need(b.status === "Pending", "Only pending bookings can be decided.");
+      need(
+        !s.quotations.some((q) => q.bookingId === b.id),
+        "A quotation exists; booking details are preserved.",
+      );
+      b.status = d.status;
+      if (d.status === "Approved") {
+        if (!s.inspections.some((i) => i.bookingId === b.id))
           s.inspections.push({
             id: id("IN"),
-            ...values,
+            bookingId: b.id,
+            date: b.date,
+            status: "Awaiting Assignment",
             area: 0,
             linear: 0,
             profile: "Not Determined",
@@ -304,29 +297,58 @@ export function apply(s, action, d, actor = {}) {
             notes: "",
             photos: [],
           });
-        notify("Foreman", "Inspection assigned", `${b.name} · ${b.date}`, [
-          d.foremanId,
-        ]);
-      }
-      if (b.clientId) {
-        notify("Client", "Booking update", `${b.id}: ${b.status}`, [b.clientId]);
-      }
-      if (d.status === "Approved") {
         const approval = bookingApprovalEmail(b);
         email(b, approval.subject, approval.message, approval.path);
       } else {
         email(
           b,
-          "Booking update",
-          `Your booking ${b.id} is ${b.status.toLowerCase()}. Preferred schedule: ${b.date} at ${b.time}.`,
-          tracking(b),
+          "Your roofing booking request was rejected",
+          `Your roofing booking request was rejected.\n\nBooking details\nReference: ${b.id}\nName: ${b.name}\nContact: ${b.phone}\nService: ${b.service}\nProject type: ${b.type}\nSite address: ${b.address}\nPreferred schedule: ${b.date} at ${b.time}`,
         );
       }
+      if (b.clientId)
+        notify("Client", "Booking update", `${b.id}: ${b.status}`, [
+          b.clientId,
+        ]);
+      break;
+    }
+    case "inspectionAssign": {
+      permit("Admin");
+      const i = get("inspections", d.id),
+        b = get("bookings", i.bookingId);
+      need(
+        bookingCanBeTracked(b),
+        "Only approved bookings can be assigned for inspection.",
+      );
+      need(
+        !["Completed"].includes(i.status) &&
+          !s.quotations.some((q) => q.inspectionId === i.id),
+        "This inspection can no longer be reassigned.",
+      );
+      const inspector = get("users", d.foremanId);
+      need(
+        inspector.role === "Foreman" && inspector.active !== false,
+        "Assign an active inspector.",
+      );
+      Object.assign(i, {
+        foremanId: inspector.id,
+        date: date(d.date, "Inspection date"),
+        status: "Scheduled",
+      });
+      notify("Foreman", "Inspection assigned", `${b.name} · ${i.date}`, [
+        inspector.id,
+      ]);
       break;
     }
     case "inspection": {
       permit("Foreman", "Admin");
       const i = get("inspections", d.id);
+      const b = get("bookings", i.bookingId);
+      need(bookingCanBeTracked(b), "Only approved bookings can be inspected.");
+      need(
+        i.foremanId,
+        "Assign an inspector before completing the inspection.",
+      );
       if (actor.role === "Foreman")
         deny(
           i.foremanId === actor.id,
@@ -363,6 +385,10 @@ export function apply(s, action, d, actor = {}) {
     case "estimate": {
       permit("Foreman", "Admin");
       const i = get("inspections", d.inspectionId);
+      need(
+        bookingCanBeTracked(get("bookings", i.bookingId)),
+        "Only approved bookings can proceed to quotation.",
+      );
       need(i.status === "Completed", "Complete the site inspection first.");
       if (actor.role === "Foreman")
         deny(
