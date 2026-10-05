@@ -397,6 +397,7 @@ test("inspection submission creates an initial estimate from catalog price snaps
   const material = s.materials.find((item) => item.id === "MAT-2");
   const submission = {
     id: i.id,
+    serviceType: "Roof Installation",
     date: today(),
     area: 120,
     linear: 40,
@@ -450,8 +451,11 @@ test("service-specific inspection submission applies only relevant charges", () 
     [
       "Roof Replacement",
       {
+        existingMaterialId: "MAT-1",
         existingProfile: "Corrugated",
-        structuralCondition: "Fair",
+        existingArea: 50,
+        existingMaterialCondition: "Fair",
+        structuralCondition: "Good",
         replacementScope: "Full Roof Replacement",
         structuralWork: "Minor Repair",
         removalRequired: true,
@@ -465,8 +469,12 @@ test("service-specific inspection submission applies only relevant charges", () 
     [
       "Roof Repair",
       {
+        existingMaterialId: "MAT-1",
         existingProfile: "Corrugated",
-        damageType: "Leak",
+        existingArea: 50,
+        damagedArea: 10,
+        damagedSheets: 1,
+        damageType: "Leak Repair",
         damageSeverity: "Moderate",
         repairType: "Leak Repair",
         removalCharges: 2000,
@@ -492,13 +500,14 @@ test("service-specific inspection submission applies only relevant charges", () 
       "inspectionSubmit",
       {
         id: i.id,
+        serviceType: service,
         date: today(),
         area: 50,
         linear: 20,
         sections: 1,
         profile: "Corrugated",
         complexity: "Simple",
-        condition: "Damaged",
+        condition: "Fair",
         details,
         items: [{ materialId: "MAT-2", quantity: 10 }],
         photos: [],

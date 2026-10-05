@@ -87,6 +87,101 @@ function assertSchema(errors) {
       `Database schema is incomplete: ${errors.join("; ")}. Run npm run db:init; incompatible existing tables require an explicit schema repair, not a database reset`,
     );
 }
+async function ensureInspectionMaterials(connection) {
+  const standardMaterials = [
+    ["Banawe", "SQM", 500, "Roofing Sheet", "0.40 mm", "Rib-Type / Ribbed"],
+    ["Twin Rib", "SQM", 550, "Roofing Sheet", "0.40 mm", "Rib-Type / Ribbed"],
+    ["Tilespan", "SQM", 600, "Roofing Sheet", "0.40 mm", "Tile Profile"],
+    ["R-Span", "SQM", 750, "Roofing Sheet", "0.50 mm", "R-Span"],
+    ["Standing Seam", "SQM", 800, "Roofing Sheet", "0.50 mm", "Standing Seam"],
+    ["Steel Decking", "SQM", 850, "Roofing Sheet", "0.80 mm", "Metal Deck"],
+    ["Curve Roof", "SQM", 850, "Roofing Sheet", "0.50 mm", "Curved Roof"],
+    ["Tile Profile", "SQM", 900, "Roofing Sheet", "0.50 mm", "Tile Profile"],
+    ["Ridge Cap", "LM", 250, "Accessory", "—", "Other"],
+    ["Flashing", "LM", 300, "Accessory", "—", "Other"],
+    ["Valley Flashing", "LM", 350, "Accessory", "—", "Other"],
+    ["Eaves Flashing", "LM", 250, "Accessory", "—", "Other"],
+    ["Barge/Side Flashing", "LM", 300, "Accessory", "—", "Other"],
+    ["Roofing Screws", "PCS", 5, "Accessory", "—", "Other"],
+    ["Sealant", "TUBE", 220, "Accessory", "—", "Other"],
+    ["Closure Strips", "PCS", 80, "Accessory", "—", "Other"],
+    ["Gutter", "LM", 500, "Accessory", "—", "Other"],
+    ["Downspout", "LM", 400, "Accessory", "—", "Other"],
+  ];
+  await connection.beginTransaction();
+  try {
+    for (const [
+      name,
+      unit,
+      price,
+      category,
+      thickness,
+      profile,
+    ] of standardMaterials) {
+      const [existing] = await connection.execute(
+        "SELECT id FROM materials WHERE name=? LIMIT 1",
+        [name],
+      );
+      if (existing.length) continue;
+      const [[position]] = await connection.query(
+        "SELECT COALESCE(MAX(_position), -1) + 1 AS nextPosition FROM materials",
+      );
+      const id = `MAT-STD-${name.toUpperCase().replace(/[^A-Z0-9]+/g, "-")}`;
+      await connection.execute(
+        "INSERT INTO materials (id, _position, name, unit, price, category, thickness, profile, active, _fields) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)",
+        [
+          id,
+          position.nextPosition,
+          name,
+          unit,
+          price,
+          category,
+          thickness,
+          profile,
+          JSON.stringify([
+            "id",
+            "name",
+            "unit",
+            "price",
+            "category",
+            "thickness",
+            "profile",
+            "active",
+          ]),
+        ],
+      );
+    }
+    const [closureRows] = await connection.execute(
+      "SELECT id, name, unit, price FROM materials WHERE name='Closure Strips' AND unit<>'PCS'",
+    );
+    for (const material of closureRows) {
+      const [[historyPosition]] = await connection.execute(
+        "SELECT COALESCE(MAX(_position), -1) + 1 AS nextPosition FROM material_history WHERE materialId=?",
+        [material.id],
+      );
+      await connection.execute(
+        "INSERT INTO material_history (materialId, _position, `at`, price, unit, name, newPrice, note, _fields) VALUES (?, ?, UTC_TIMESTAMP(3), ?, ?, ?, ?, ?, ?)",
+        [
+          material.id,
+          historyPosition.nextPosition,
+          material.price,
+          material.unit,
+          material.name,
+          material.price,
+          "Standard inspection unit corrected to PCS",
+          JSON.stringify(["at", "price", "unit", "name", "newPrice", "note"]),
+        ],
+      );
+      await connection.execute("UPDATE materials SET unit='PCS' WHERE id=?", [
+        material.id,
+      ]);
+    }
+    await connection.commit();
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  }
+}
 export async function checkSchema(pool) {
   const connection = await pool.getConnection();
   try {
@@ -178,6 +273,7 @@ export async function initializeSchema(pool) {
         if (!info.tables.get(table).has(column.toLowerCase()))
           await connection.query(`ALTER TABLE ${quote(table)} ${sql}`);
     assertSchema(problems(await inventory(connection)));
+    await ensureInspectionMaterials(connection);
     const [[state]] = await connection.query(
       "SELECT revision FROM app_state WHERE id=1",
     );

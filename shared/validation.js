@@ -1,4 +1,5 @@
 import { profiles, accessories } from "./roofing.js";
+import { roofTypes, serviceTypes } from "./inspection.js";
 export class ValidationError extends Error {
   constructor(field, message) {
     super(message);
@@ -388,11 +389,7 @@ export function validateAction(action, input, { state, user } = {}) {
           ...(submitting ? { max: today() } : {}),
         });
       if (has("serviceType"))
-        select("serviceType", "Service type", [
-          "Roof Installation",
-          "Roof Replacement",
-          "Roof Repair",
-        ]);
+        select("serviceType", "Service type", serviceTypes);
       for (const [key, label, options] of [
         ["area", "Roof area", { min: 0.01, max: limits.measurement }],
         [
@@ -408,7 +405,7 @@ export function validateAction(action, input, { state, user } = {}) {
       ])
         if (has(key) && d[key] !== "") num(key, label, options);
       if (has("profile") && d.profile)
-        select("profile", "Roof profile", profiles);
+        select("profile", "Roof profile", [...profiles, ...roofTypes]);
       if (has("complexity") && d.complexity)
         select("complexity", "Roof complexity", [
           "Simple",
@@ -421,6 +418,8 @@ export function validateAction(action, input, { state, user } = {}) {
           "New / No Existing Structure",
           "Good",
           "Fair",
+          "Poor",
+          "Severe",
           "Damaged",
           "Severely Damaged",
           "Requires Further Assessment",
@@ -467,11 +466,14 @@ export function validateAction(action, input, { state, user } = {}) {
         const allowed = [
           "supportingCondition",
           "supportingNotes",
+          "customRoofType",
+          "existingCustomRoofType",
           "structuralCondition",
           "existingMaterialId",
           "existingProfile",
           "existingArea",
           "existingDamage",
+          "existingMaterialCondition",
           "existingAccessoryIds",
           "removalRequired",
           "replacementScope",
@@ -482,7 +484,9 @@ export function validateAction(action, input, { state, user } = {}) {
           "damageSeverity",
           "damagedSheets",
           "repairType",
+          "otherDamageType",
           "removalCharges",
+          "laborCharges",
           "repairCharges",
           "additionalCharges",
           "additionalWork",
@@ -490,20 +494,19 @@ export function validateAction(action, input, { state, user } = {}) {
         keys(d.details, allowed);
         const detailChoices = {
           supportingCondition: [
-            "New / No Existing Structure",
+            "New/No existing Structure",
             "Good",
             "Fair",
             "Needs Repair",
-            "Requires Further Assessment",
           ],
-          structuralCondition: [
+          structuralCondition: ["Good", "Needs Repair"],
+          existingProfile: roofTypes,
+          existingMaterialCondition: [
             "Good",
             "Fair",
-            "Damaged",
+            "Poor",
             "Severely Damaged",
-            "Requires Further Assessment",
           ],
-          existingProfile: profiles,
           replacementScope: [
             "Full Roof Replacement",
             "Partial Roof Replacement",
@@ -513,7 +516,18 @@ export function validateAction(action, input, { state, user } = {}) {
             "Minor Repair",
             "Requires Further Assessment",
           ],
-          damageSeverity: ["Minor", "Moderate", "Severe"],
+          damageSeverity: ["Light", "Moderate", "Severe"],
+          damageType: [
+            "Leak Repair",
+            "Damaged Roofing Sheet Replacement",
+            "Loose Roofing Sheet Repair",
+            "Flashing Repair",
+            "Ridge Cap Repair",
+            "Gutter Repair",
+            "Sealant/Joint Repair",
+            "Minor Roof Restoration",
+            "Other",
+          ],
           repairType: [
             "Leak Repair",
             "Damaged Roofing Sheet Replacement",
@@ -571,6 +585,7 @@ export function validateAction(action, input, { state, user } = {}) {
             { min: 1, max: limits.quantity, decimals: 0 },
           ],
           ["removalCharges", "Removal/disposal charges", { min: 0 }],
+          ["laborCharges", "Labor charges", { min: 0 }],
           ["repairCharges", "Repair charges", { min: 0 }],
           ["additionalCharges", "Additional charges", { min: 0 }],
         ])
@@ -579,7 +594,9 @@ export function validateAction(action, input, { state, user } = {}) {
         for (const key of [
           "supportingNotes",
           "existingDamage",
-          "damageType",
+          "customRoofType",
+          "existingCustomRoofType",
+          "otherDamageType",
           "additionalWork",
         ])
           if (d.details[key] !== undefined)
@@ -867,6 +884,7 @@ export function validateAction(action, input, { state, user } = {}) {
       const m = find("materials", item.materialId, "Material");
       if (
         ["PCS", "TUBE", "SET"].includes(m.unit) &&
+        item.quantity !== "" &&
         !Number.isInteger(item.quantity)
       )
         fail("items", `${m.name}: ${m.unit} quantities must be whole numbers.`);

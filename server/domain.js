@@ -13,6 +13,11 @@ import {
   personName,
   limits,
 } from "../shared/validation.js";
+import {
+  inspectionMaterialAmount,
+  serviceTypes,
+  standardInspectionItems,
+} from "../shared/inspection.js";
 import { archiveNonEmployeePayroll } from "./payroll-fields.js";
 import { randomUUID } from "node:crypto";
 import { hashPassword, verifyPassword, validEmail, roles } from "./auth.js";
@@ -156,41 +161,12 @@ export function apply(s, action, d, actor = {}) {
     return b;
   };
   const inspectionServiceType = (booking, inspection = {}) =>
-    inspection.serviceType || booking.service || "Roof Installation";
-  const defaultInspectionItems = (serviceType) => {
-    if (!["Roof Installation", "Roof Replacement"].includes(serviceType))
-      return [];
-    const catalog = s.materials.filter((material) => material.active);
-    const lookup = (name) =>
-      catalog.find((material) => material.name === name) || null;
-    const sheet =
-      lookup("Twin Rib") ||
-      lookup("Banawe") ||
-      lookup("Tilespan") ||
-      catalog.find((material) => material.category === "Roofing Sheet") ||
-      null;
-    const rows = [
-      ["Roofing Sheet", sheet],
-      ["Ridge Cap", lookup("Ridge Cap")],
-      ["Flashing", lookup("Flashing")],
-      ["Valley Flashing", lookup("Valley Flashing")],
-      ["Eaves Flashing", lookup("Eaves Flashing")],
-      ["Barge/Side Flashing", lookup("Barge/Side Flashing")],
-      ["Roofing Screws", lookup("Roofing Screws")],
-      ["Sealant", lookup("Sealant")],
-      ["Closure Strips", lookup("Closure Strips")],
-      ["Gutter", lookup("Gutter")],
-      ["Downspout", lookup("Downspout")],
-    ].filter(([, material]) => material);
-    return rows.map(([name, material]) => ({
-      materialId: material.id,
-      name,
-      unit: material.unit,
-      quantity: "",
-      price: material.price,
-    }));
-  };
-  const updateInspection = (inspection, data) => {
+    inspection.serviceType || booking.service;
+  const updateInspection = (
+    inspection,
+    data,
+    { snapshotCatalogPrice = false } = {},
+  ) => {
     for (const key of [
       "date",
       "serviceType",
@@ -247,7 +223,11 @@ export function apply(s, action, d, actor = {}) {
           name: old?.name || material.name,
           unit: old?.unit || material.unit,
           quantity: line.quantity,
-          price: old?.price ?? material.price,
+          price: snapshotCatalogPrice
+            ? material.price
+            : (old?.price ?? material.price),
+          category: material.category,
+          thickness: material.thickness,
         };
       });
     }
@@ -259,10 +239,10 @@ export function apply(s, action, d, actor = {}) {
         (details.removalRequired || details.disposalRequired)
           ? details.removalCharges || 0
           : 0,
-      repairs =
-        serviceType === "Roof Repair" ? details.repairCharges || 0 : 0,
+      repairs = serviceType === "Roof Repair" ? details.repairCharges || 0 : 0,
+      labor = details.laborCharges || 0,
       additional = details.additionalCharges || 0;
-    return money(removal + repairs + additional);
+    return money(removal + repairs + labor + additional);
   };
   // Check private ownership before reporting field errors for another user's record.
   if (actor.role === "Foreman") {
@@ -394,7 +374,7 @@ export function apply(s, action, d, actor = {}) {
           s.inspections.push({
             id: id("IN"),
             bookingId: b.id,
-            serviceType: b.service,
+            serviceType: "",
             date: b.date,
             status: "Awaiting Assignment",
             area: 0,
@@ -406,7 +386,7 @@ export function apply(s, action, d, actor = {}) {
             accessories: [],
             notes: "",
             photos: [],
-            items: defaultInspectionItems(b.service),
+            items: standardInspectionItems(s.materials),
           });
         const approval = bookingApprovalEmail(b);
         email(b, approval.subject, approval.message, approval.path);
@@ -428,7 +408,7 @@ export function apply(s, action, d, actor = {}) {
       const i = get("inspections", d.id),
         b = get("bookings", i.bookingId);
       need(
-        bookingCanBeTracked(b),
+        b.status === "Approved",
         "Only approved bookings can be assigned for inspection.",
       );
       need(
@@ -456,7 +436,7 @@ export function apply(s, action, d, actor = {}) {
       permit("Foreman", "Admin");
       const i = get("inspections", d.id),
         b = get("bookings", i.bookingId);
-      need(bookingCanBeTracked(b), "Only approved bookings can be inspected.");
+      need(b.status === "Approved", "Only approved bookings can be inspected.");
       if (actor.role === "Foreman")
         deny(
           i.foremanId === actor.id,
@@ -467,7 +447,9 @@ export function apply(s, action, d, actor = {}) {
           !s.quotations.some((q) => q.inspectionId === i.id),
         "This inspection has already been submitted for review.",
       );
-      updateInspection(i, d);
+      updateInspection(i, d, {
+        snapshotCatalogPrice: action === "inspectionSubmit",
+      });
       if (action === "inspectionDraft") {
         i.status = "In Progress";
         break;
@@ -476,8 +458,11 @@ export function apply(s, action, d, actor = {}) {
         i.foremanId,
         "Assign an inspector before submitting the inspection.",
       );
-      const serviceType = inspectionServiceType(b, i);
-      need(serviceType, "Choose the inspection service type.");
+      const serviceType = i.serviceType;
+      need(
+        serviceTypes.includes(serviceType),
+        "Choose the inspection service type.",
+      );
       need(i.date, "Enter the inspection date.");
       need(i.area > 0, "Roof area must be greater than zero.");
       need(i.linear > 0, "Linear measurement must be greater than zero.");
@@ -485,38 +470,83 @@ export function apply(s, action, d, actor = {}) {
         Number.isInteger(i.sections) && i.sections > 0,
         "Number of roof sections must be a positive whole number.",
       );
-      need(
-        i.profile && i.profile !== "Not Determined",
-        "Select the roof profile.",
-      );
       need(i.complexity, "Select the roof complexity.");
       const details = i.details || {};
-      if (serviceType === "Roof Installation")
+      if (
+        serviceType !== "Roof Installation" &&
+        (!i.profile || i.profile === "Not Determined")
+      )
+        i.profile = details.existingProfile || "Other";
+      if (serviceType === "Roof Installation") {
         need(
-          details.supportingCondition,
+          i.profile && i.profile !== "Not Determined",
+          "Select the roof type.",
+        );
+        if (i.profile === "Other")
+          need(details.customRoofType, "Enter the custom roof type.");
+        need(
+          [
+            "New/No existing Structure",
+            "Good",
+            "Fair",
+            "Needs Repair",
+          ].includes(details.supportingCondition),
           "Enter the supporting structure condition.",
         );
+      }
       if (serviceType === "Roof Replacement") {
-        need(i.condition, "Enter the existing roof condition.");
+        need(
+          ["Good", "Fair", "Poor"].includes(i.condition),
+          "Select the existing roof condition.",
+        );
+        need(
+          details.existingMaterialId,
+          "Select the existing roofing material.",
+        );
         need(
           details.existingProfile &&
             details.existingProfile !== "Not Determined",
           "Select the existing roof profile.",
         );
+        if (details.existingProfile === "Other")
+          need(
+            details.existingCustomRoofType,
+            "Enter the custom existing roof type.",
+          );
+        need(details.existingArea > 0, "Enter the existing roof area.");
         need(details.structuralCondition, "Enter the structural condition.");
-        need(details.replacementScope, "Select the replacement scope.");
-        need(details.structuralWork, "Select the structural work required.");
+        need(
+          details.existingMaterialCondition,
+          "Select the existing material condition.",
+        );
+        need(details.structuralWork, "Select the additional structure work.");
       }
       if (serviceType === "Roof Repair") {
-        need(i.condition, "Enter the existing roof condition.");
+        need(
+          ["Fair", "Poor", "Severe"].includes(i.condition),
+          "Select the roof condition.",
+        );
+        need(
+          details.existingMaterialId,
+          "Select the existing roofing material.",
+        );
         need(
           details.existingProfile &&
             details.existingProfile !== "Not Determined",
           "Select the existing roof profile.",
         );
-        need(details.damageType, "Enter the damage type.");
+        if (details.existingProfile === "Other")
+          need(
+            details.existingCustomRoofType,
+            "Enter the custom existing roof type.",
+          );
+        need(details.existingArea > 0, "Enter the roof area.");
+        need(details.damagedArea > 0, "Enter the damaged area.");
+        need(details.damageType, "Select the damage type.");
+        if (details.damageType === "Other")
+          need(details.otherDamageType, "Enter the custom damage type.");
         need(details.damageSeverity, "Select the damage severity.");
-        need(details.repairType, "Select the repair type.");
+        need(details.damagedSheets > 0, "Enter the number of damaged sheets.");
       }
       need(
         i.items?.length && i.items.every((item) => Number(item.quantity) > 0),
@@ -524,8 +554,10 @@ export function apply(s, action, d, actor = {}) {
       );
       const charges = inspectionCharges(b, details, i),
         total = money(
-          i.items.reduce((sum, item) => sum + item.quantity * item.price, 0) +
-            charges,
+          i.items.reduce(
+            (sum, item) => sum + inspectionMaterialAmount(item),
+            0,
+          ) + charges,
         );
       need(
         total <= limits.amount,
@@ -536,7 +568,13 @@ export function apply(s, action, d, actor = {}) {
         id: id("QT"),
         bookingId: b.id,
         inspectionId: i.id,
-        items: i.items.map((item) => ({ ...item })),
+        items: i.items.map(({ materialId, name, unit, quantity, price }) => ({
+          materialId,
+          name,
+          unit,
+          quantity,
+          price,
+        })),
         charges,
         total,
         downpayment: money(total * 0.3),
@@ -555,7 +593,7 @@ export function apply(s, action, d, actor = {}) {
       permit("Admin");
       const i = get("inspections", d.id);
       const b = get("bookings", i.bookingId);
-      need(bookingCanBeTracked(b), "Only approved bookings can be inspected.");
+      need(b.status === "Approved", "Only approved bookings can be inspected.");
       need(
         i.foremanId,
         "Assign an inspector before completing the inspection.",

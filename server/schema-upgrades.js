@@ -11,6 +11,7 @@ export const columnUpgrades = {
   },
   payroll: { workedHours: "ADD COLUMN `workedHours` DOUBLE NULL" },
   inspections: {
+    serviceType: "ADD COLUMN `serviceType` TEXT NULL",
     items: "ADD COLUMN `items` JSON NULL",
     details: "ADD COLUMN `details` JSON NULL",
   },

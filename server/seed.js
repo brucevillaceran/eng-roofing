@@ -17,13 +17,20 @@ export function seed() {
     ["Closure Strips", "PCS", 80],
     ["Gutter", "LM", 500],
     ["Downspout", "LM", 400],
+    ["Curve Roof", "SQM", 850],
+    ["Tile Profile", "SQM", 900],
   ].map(([name, unit, price], i) => ({
     id: `MAT-${i + 1}`,
     name,
     unit,
     price,
-    category: i < 6 ? "Roofing Sheet" : "Accessory",
-    thickness: i < 6 ? "0.40 mm" : "—",
+    category: i < 6 || i >= 16 ? "Roofing Sheet" : "Accessory",
+    thickness:
+      i < 6
+        ? ["0.40 mm", "0.40 mm", "0.40 mm", "0.50 mm", "0.50 mm", "0.80 mm"][i]
+        : i >= 16
+          ? "0.50 mm"
+          : "—",
     profile:
       i < 6
         ? [
@@ -34,7 +41,11 @@ export function seed() {
             "Standing Seam",
             "Metal Deck",
           ][i]
-        : "Other",
+        : i === 16
+          ? "Curved Roof"
+          : i === 17
+            ? "Tile Profile"
+            : "Other",
     active: true,
     history: [],
   }));

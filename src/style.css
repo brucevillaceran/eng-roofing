@@ -1733,6 +1733,32 @@ tr.clickable:hover td {
 .quote-line b {
   font-size: 12px;
 }
+.inspection-material-table {
+  overflow-x: auto;
+}
+.inspection-material-table .quote-header,
+.inspection-material-table .quote-line {
+  grid-template-columns: minmax(150px, 2fr) 0.8fr 0.7fr 0.45fr 0.8fr 0.8fr 25px;
+  gap: 8px;
+  min-width: 680px;
+}
+.inspection-material-table .quote-line select {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid #e9d5d5;
+  border-radius: 4px;
+  padding: 8px 5px;
+  font-size: 11px;
+}
+.inspection-review-table {
+  overflow-x: auto;
+}
+.inspection-review-table .quote-header,
+.inspection-review-table .quote-line {
+  grid-template-columns: minmax(150px, 2fr) 0.8fr 0.7fr 0.45fr 0.8fr 0.8fr;
+  gap: 8px;
+  min-width: 650px;
+}
 .add-material {
   width: 100%;
   margin-top: 15px;

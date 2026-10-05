@@ -63,6 +63,7 @@ CREATE TABLE IF NOT EXISTS `inspections` (
   _position INT NOT NULL,
   `bookingId` VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL,
   `foremanId` VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL,
+  `serviceType` TEXT NULL,
   `date` DATE NULL,
   `status` TEXT NULL,
   `area` DOUBLE NULL,

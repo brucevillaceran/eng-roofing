@@ -78,6 +78,12 @@ import {
 } from "recharts";
 import QRCode from "qrcode";
 import { profiles } from "../shared/roofing.js";
+import {
+  inspectionMaterialAmount,
+  roofTypes,
+  serviceTypes as services,
+  standardInspectionItems,
+} from "../shared/inspection.js";
 import "./style.css";
 import {
   validateAction,
@@ -118,7 +124,6 @@ const initials = (n) =>
     .slice(0, 2)
     .map((x) => x[0])
     .join("") || "EN";
-const services = ["Roof Installation", "Roof Replacement", "Roof Repair"];
 const projectTypes = [
   "Residential",
   "Commercial",
@@ -3295,52 +3300,22 @@ function InspectionEditor({ inspection: initialInspection }) {
     inspection =
       s.inspections.find((item) => item.id === initialInspection.id) ||
       initialInspection,
-    booking = s.bookings.find((item) => item.id === inspection.bookingId),
-    inspectionService = inspection.serviceType || booking.service,
-    defaultInspectionRows =
-      ["Roof Installation", "Roof Replacement"].includes(inspectionService) &&
-      (() => {
-        const catalog = s.materials.filter((material) => material.active);
-        const lookup = (name) =>
-          catalog.find((material) => material.name === name) || null;
-        const roofingSheet =
-          lookup("Twin Rib") ||
-          lookup("Banawe") ||
-          lookup("Tilespan") ||
-          catalog.find((material) => material.category === "Roofing Sheet") ||
-          null;
-        const rows = [
-          ["Roofing Sheet", roofingSheet],
-          ["Ridge Cap", lookup("Ridge Cap")],
-          ["Flashing", lookup("Flashing")],
-          ["Valley Flashing", lookup("Valley Flashing")],
-          ["Eaves Flashing", lookup("Eaves Flashing")],
-          ["Barge/Side Flashing", lookup("Barge/Side Flashing")],
-          ["Roofing Screws", lookup("Roofing Screws")],
-          ["Sealant", lookup("Sealant")],
-          ["Closure Strips", lookup("Closure Strips")],
-          ["Gutter", lookup("Gutter")],
-          ["Downspout", lookup("Downspout")],
-        ].filter(([, material]) => material);
-        return rows.map(([name, material]) => ({
-          materialId: material.id,
-          name,
-          unit: material.unit,
-          quantity: "",
-          price: material.price,
-        }));
-      })(),
-    [items, setItems] = useState(
-      (inspection.items && inspection.items.length
+    booking = s.bookings.find((item) => item.id === inspection.bookingId);
+  const [serviceType, setServiceType] = useState(inspection.serviceType || ""),
+    [roofProfile, setRoofProfile] = useState(
+      roofTypes.includes(inspection.profile) ? inspection.profile : "",
+    ),
+    [items, setItems] = useState(() =>
+      (inspection.items?.length
         ? inspection.items
-        : defaultInspectionRows || []
+        : standardInspectionItems(s.materials)
       ).map((item) => ({ ...item })),
     ),
     [details, setDetails] = useState(inspection.details || {}),
     [photos, setPhotos] = useState(inspection.photos || []),
     [error, setError] = useState(""),
-    [busy, setBusy] = useState(false),
-    form = useRef(null),
+    [busy, setBusy] = useState(false);
+  const form = useRef(null),
     quote = s.quotations.find((item) => item.inspectionId === inspection.id),
     assignedInspector = s.users.find((u) => u.id === inspection.foremanId),
     submitted = inspection.status === "Submitted for Review" || !!quote,
@@ -3353,24 +3328,50 @@ function InspectionEditor({ inspection: initialInspection }) {
       inspection.status === "Completed" ||
       (user.role === "Foreman" && !inspection.foremanId),
     totalMaterials = items.reduce(
-      (total, item) =>
-        total + Number(item.quantity || 0) * Number(item.price || 0),
+      (total, item) => total + inspectionMaterialAmount(item),
       0,
     ),
     removal = Number(details.removalCharges || 0),
     repair = Number(details.repairCharges || 0),
+    labor = Number(details.laborCharges || 0),
     additional = Number(details.additionalCharges || 0),
     includeRemoval =
-      inspectionService === "Roof Replacement" &&
+      serviceType === "Roof Replacement" &&
       (details.removalRequired === true || details.disposalRequired === true),
     totalCharges =
       (includeRemoval ? removal : 0) +
-      (inspectionService === "Roof Repair" ? repair : 0) +
+      (serviceType === "Roof Repair" ? repair : 0) +
+      labor +
       additional,
     initialEstimate = totalMaterials + totalCharges;
   const accessories = s.materials.filter(
     (material) => material.active && material.category === "Accessory",
   );
+  const selectMaterial = (index, materialId) => {
+    const material = s.materials.find(
+      (item) => item.id === materialId && item.active,
+    );
+    if (
+      !material ||
+      items.some((item, row) => row !== index && item.materialId === materialId)
+    )
+      return;
+    setItems((current) =>
+      current.map((line, row) =>
+        row === index
+          ? {
+              ...line,
+              materialId: material.id,
+              name: material.name,
+              unit: material.unit,
+              price: material.price,
+              category: material.category,
+              thickness: material.thickness,
+            }
+          : line,
+      ),
+    );
+  };
   const addMaterial = (materialId) => {
     const material = s.materials.find((item) => item.id === materialId);
     if (material && !items.some((item) => item.materialId === material.id))
@@ -3381,6 +3382,8 @@ function InspectionEditor({ inspection: initialInspection }) {
           name: material.name,
           unit: material.unit,
           price: material.price,
+          category: material.category,
+          thickness: material.thickness,
           quantity: "",
         },
       ]);
@@ -3394,11 +3397,14 @@ function InspectionEditor({ inspection: initialInspection }) {
       for (const key of [
         "supportingCondition",
         "supportingNotes",
+        "customRoofType",
+        "existingCustomRoofType",
         "structuralCondition",
         "existingMaterialId",
         "existingProfile",
         "existingArea",
         "existingDamage",
+        "existingMaterialCondition",
         "removalRequired",
         "replacementScope",
         "structuralWork",
@@ -3408,7 +3414,9 @@ function InspectionEditor({ inspection: initialInspection }) {
         "damageSeverity",
         "damagedSheets",
         "repairType",
+        "otherDamageType",
         "removalCharges",
+        "laborCharges",
         "repairCharges",
         "additionalCharges",
         "additionalWork",
@@ -3429,7 +3437,11 @@ function InspectionEditor({ inspection: initialInspection }) {
         {
           id: inspection.id,
           ...raw,
-          items,
+          serviceType,
+          items: (submit
+            ? items.filter((item) => Number(item.quantity) > 0)
+            : items
+          ).map(({ materialId, quantity }) => ({ materialId, quantity })),
           details: {
             ...detailsData,
             existingAccessoryIds: details.existingAccessoryIds || [],
@@ -3462,7 +3474,7 @@ function InspectionEditor({ inspection: initialInspection }) {
         <span>
           <b>{booking.type}</b> project
         </span>
-        <span>{booking.service}</span>
+        <span>{serviceType || "Service type not selected"}</span>
         <span>{booking.address}</span>
         <span>
           Assigned: {assignedInspector?.name || "Awaiting assignment"}
@@ -3543,13 +3555,21 @@ function InspectionEditor({ inspection: initialInspection }) {
           }}
         >
           {section(
-            "Roof measurements",
+            serviceType === "Roof Installation"
+              ? "Roof details and measurements"
+              : "Roof measurements",
             <>
               <Field
                 label="Service type"
                 name="serviceType"
                 options={services}
-                value={inspection.serviceType || booking.service}
+                value={serviceType}
+                required
+                onChange={(event) => {
+                  const nextService = event.target.value;
+                  setServiceType(nextService);
+                  setItems(standardInspectionItems(s.materials));
+                }}
               />
               <Field
                 label="Inspection date"
@@ -3585,12 +3605,24 @@ function InspectionEditor({ inspection: initialInspection }) {
                 step="1"
                 value={inspection.sections || ""}
               />
-              <Field
-                label="Roof type / profile"
-                name="profile"
-                options={profiles}
-                value={inspection.profile || ""}
-              />
+              {serviceType === "Roof Installation" && (
+                <>
+                  <Field
+                    label="Roof type"
+                    name="profile"
+                    options={roofTypes}
+                    value={roofProfile}
+                    onChange={(event) => setRoofProfile(event.target.value)}
+                  />
+                  {roofProfile === "Other" && (
+                    <Field
+                      label="Custom roof type"
+                      name="customRoofType"
+                      value={details.customRoofType || ""}
+                    />
+                  )}
+                </>
+              )}
               <Field
                 label="Roof complexity"
                 name="complexity"
@@ -3599,21 +3631,34 @@ function InspectionEditor({ inspection: initialInspection }) {
               />
             </>,
           )}
-          {inspectionService === "Roof Installation" &&
+          {serviceType === "Roof Installation" &&
             section(
-              "Supporting structure condition",
+              "Installation other details",
               <>
                 <Field
-                  label="Supporting structure condition"
+                  label="Existing structure condition"
                   name="supportingCondition"
                   options={[
-                    "New / No Existing Structure",
+                    "New/No existing Structure",
                     "Good",
                     "Fair",
                     "Needs Repair",
-                    "Requires Further Assessment",
                   ]}
                   value={details.supportingCondition || ""}
+                />
+                <Field
+                  label="Labor requirement / charges (₱)"
+                  name="laborCharges"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={details.laborCharges ?? 0}
+                  onChange={(event) =>
+                    setDetails((current) => ({
+                      ...current,
+                      laborCharges: event.target.value,
+                    }))
+                  }
                 />
                 <Field
                   label="Supporting structure notes"
@@ -3623,37 +3668,48 @@ function InspectionEditor({ inspection: initialInspection }) {
                 />
               </>,
             )}
-          {inspectionService === "Roof Replacement" &&
+          {serviceType === "Roof Replacement" &&
             section(
-              "Existing roof and replacement scope",
+              "Existing roof information and other details",
               <>
                 <Field
                   label="Existing roofing material"
                   name="existingMaterialId"
                   value={details.existingMaterialId || ""}
                   options={s.materials
-                    .filter((material) => material.active)
+                    .filter(
+                      (material) =>
+                        material.active &&
+                        material.category === "Roofing Sheet",
+                    )
                     .map((material) => ({
                       value: material.id,
                       label: `${material.name} · ${material.unit}`,
                     }))}
                 />
                 <Field
-                  label="Existing roof type / profile"
+                  label="Existing roof type"
                   name="existingProfile"
-                  options={profiles}
+                  options={roofTypes}
                   value={details.existingProfile || ""}
+                  onChange={(event) =>
+                    setDetails((current) => ({
+                      ...current,
+                      existingProfile: event.target.value,
+                    }))
+                  }
                 />
+                {details.existingProfile === "Other" && (
+                  <Field
+                    label="Custom existing roof type"
+                    name="existingCustomRoofType"
+                    value={details.existingCustomRoofType || ""}
+                  />
+                )}
                 <Field
                   label="Existing roof condition"
                   name="condition"
-                  options={[
-                    "Good",
-                    "Fair",
-                    "Damaged",
-                    "Severely Damaged",
-                    "Requires Further Assessment",
-                  ]}
+                  options={["Good", "Fair", "Poor"]}
                   value={inspection.condition || ""}
                 />
                 <Field
@@ -3671,16 +3727,7 @@ function InspectionEditor({ inspection: initialInspection }) {
                   value={details.existingDamage || ""}
                 />
                 <Field
-                  label="Replacement scope"
-                  name="replacementScope"
-                  options={[
-                    "Full Roof Replacement",
-                    "Partial Roof Replacement",
-                  ]}
-                  value={details.replacementScope || ""}
-                />
-                <Field
-                  label="Structural work"
+                  label="Additional structure work"
                   name="structuralWork"
                   options={[
                     "None",
@@ -3692,14 +3739,14 @@ function InspectionEditor({ inspection: initialInspection }) {
                 <Field
                   label="Structural condition"
                   name="structuralCondition"
-                  options={[
-                    "Good",
-                    "Fair",
-                    "Damaged",
-                    "Severely Damaged",
-                    "Requires Further Assessment",
-                  ]}
+                  options={["Good", "Needs Repair"]}
                   value={details.structuralCondition || ""}
+                />
+                <Field
+                  label="Existing material condition"
+                  name="existingMaterialCondition"
+                  options={["Good", "Fair", "Poor", "Severely Damaged"]}
+                  value={details.existingMaterialCondition || ""}
                 />
                 <Field
                   label="Roof removal required"
@@ -3778,37 +3825,48 @@ function InspectionEditor({ inspection: initialInspection }) {
                 )}
               </>,
             )}
-          {inspectionService === "Roof Repair" &&
+          {serviceType === "Roof Repair" &&
             section(
-              "Existing roof and repair details",
+              "Existing roof information",
               <>
                 <Field
                   label="Existing roofing material"
                   name="existingMaterialId"
                   value={details.existingMaterialId || ""}
                   options={s.materials
-                    .filter((material) => material.active)
+                    .filter(
+                      (material) =>
+                        material.active &&
+                        material.category === "Roofing Sheet",
+                    )
                     .map((material) => ({
                       value: material.id,
                       label: `${material.name} · ${material.unit}`,
                     }))}
                 />
                 <Field
-                  label="Roof type / profile"
+                  label="Roof type"
                   name="existingProfile"
-                  options={profiles}
+                  options={roofTypes}
                   value={details.existingProfile || ""}
+                  onChange={(event) =>
+                    setDetails((current) => ({
+                      ...current,
+                      existingProfile: event.target.value,
+                    }))
+                  }
                 />
+                {details.existingProfile === "Other" && (
+                  <Field
+                    label="Custom existing roof type"
+                    name="existingCustomRoofType"
+                    value={details.existingCustomRoofType || ""}
+                  />
+                )}
                 <Field
-                  label="Existing roof condition"
+                  label="Roof condition"
                   name="condition"
-                  options={[
-                    "Good",
-                    "Fair",
-                    "Damaged",
-                    "Severely Damaged",
-                    "Requires Further Assessment",
-                  ]}
+                  options={["Fair", "Poor", "Severe"]}
                   value={inspection.condition || ""}
                 />
                 <Field
@@ -3830,25 +3888,6 @@ function InspectionEditor({ inspection: initialInspection }) {
                 <Field
                   label="Damage type"
                   name="damageType"
-                  value={details.damageType || ""}
-                />
-                <Field
-                  label="Damage severity"
-                  name="damageSeverity"
-                  options={["Minor", "Moderate", "Severe"]}
-                  value={details.damageSeverity || ""}
-                />
-                <Field
-                  label="Number of damaged sheets"
-                  name="damagedSheets"
-                  type="number"
-                  min="1"
-                  step="1"
-                  value={details.damagedSheets || ""}
-                />
-                <Field
-                  label="Repair type"
-                  name="repairType"
                   options={[
                     "Leak Repair",
                     "Damaged Roofing Sheet Replacement",
@@ -3860,7 +3899,34 @@ function InspectionEditor({ inspection: initialInspection }) {
                     "Minor Roof Restoration",
                     "Other",
                   ]}
-                  value={details.repairType || ""}
+                  value={details.damageType || ""}
+                  onChange={(event) =>
+                    setDetails((current) => ({
+                      ...current,
+                      damageType: event.target.value,
+                    }))
+                  }
+                />
+                {details.damageType === "Other" && (
+                  <Field
+                    label="Custom damage type"
+                    name="otherDamageType"
+                    value={details.otherDamageType || ""}
+                  />
+                )}
+                <Field
+                  label="Damage severity"
+                  name="damageSeverity"
+                  options={["Light", "Moderate", "Severe"]}
+                  value={details.damageSeverity || ""}
+                />
+                <Field
+                  label="Number of damaged sheets"
+                  name="damagedSheets"
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={details.damagedSheets || ""}
                 />
                 <Field
                   label="Repair charges"
@@ -3882,63 +3948,106 @@ function InspectionEditor({ inspection: initialInspection }) {
             "Materials and accessories",
             <>
               <div className="full">
-                <div className="quote-lines">
+                <div className="quote-lines inspection-material-table">
                   <div className="quote-header">
                     <span>Material</span>
+                    <span>Thickness</span>
                     <span>Quantity</span>
                     <span>Unit</span>
                     <span>Unit price</span>
-                    <span>Subtotal</span>
+                    <span>Amount</span>
                     <span />
                   </div>
-                  {items.map((item, index) => (
-                    <div className="quote-line" key={item.materialId}>
-                      <strong>{item.name}</strong>
-                      <input
-                        aria-label={`Quantity for ${item.name}`}
-                        type="number"
-                        min="0.01"
-                        max="1000000"
-                        step="0.01"
-                        value={item.quantity}
-                        disabled={frozen}
-                        onChange={(event) =>
-                          setItems((current) =>
-                            current.map((line, lineIndex) =>
-                              lineIndex === index
-                                ? { ...line, quantity: event.target.value }
-                                : line,
-                            ),
-                          )
-                        }
-                      />
-                      <span>{item.unit}</span>
-                      <span>{money(item.price)}</span>
-                      <b>
-                        {money(
-                          Number(item.quantity || 0) * Number(item.price || 0),
-                        )}
-                      </b>
-                      {!frozen ? (
-                        <button
-                          type="button"
-                          className="icon-btn"
-                          aria-label={`Remove ${item.name}`}
-                          onClick={() =>
+                  {items.map((item, index) => {
+                    const catalogItem = s.materials.find(
+                        (material) => material.id === item.materialId,
+                      ),
+                      isRoofingSheet =
+                        (item.category || catalogItem?.category) ===
+                        "Roofing Sheet",
+                      materialOptions = s.materials.filter(
+                        (material) =>
+                          (material.active ||
+                            material.id === item.materialId) &&
+                          (!isRoofingSheet ||
+                            material.category === "Roofing Sheet") &&
+                          !items.some(
+                            (line, row) =>
+                              row !== index && line.materialId === material.id,
+                          ),
+                      );
+                    return (
+                      <div className="quote-line" key={item.materialId}>
+                        <select
+                          aria-label={`Material for row ${index + 1}`}
+                          value={item.materialId}
+                          disabled={frozen}
+                          onChange={(event) =>
+                            selectMaterial(index, event.target.value)
+                          }
+                        >
+                          {materialOptions.map((material) => (
+                            <option key={material.id} value={material.id}>
+                              {isRoofingSheet
+                                ? `Roofing Sheet · ${material.name} · ${material.thickness} · ${money(material.price)}/SQM`
+                                : item.name === "Downsprout" &&
+                                    material.name === "Downspout"
+                                  ? "Downsprout"
+                                  : material.name}
+                            </option>
+                          ))}
+                        </select>
+                        <span>
+                          {isRoofingSheet
+                            ? item.thickness || catalogItem?.thickness || "—"
+                            : "—"}
+                        </span>
+                        <input
+                          aria-label={`Quantity for ${item.name}`}
+                          type="number"
+                          min="0.01"
+                          max="1000000"
+                          step={
+                            ["PCS", "TUBE", "SET"].includes(item.unit)
+                              ? "1"
+                              : "0.01"
+                          }
+                          value={item.quantity}
+                          disabled={frozen}
+                          onChange={(event) =>
                             setItems((current) =>
-                              current.filter(
-                                (_, lineIndex) => lineIndex !== index,
+                              current.map((line, lineIndex) =>
+                                lineIndex === index
+                                  ? { ...line, quantity: event.target.value }
+                                  : line,
                               ),
                             )
                           }
-                        >
-                          <Trash2 size={15} />
-                        </button>
-                      ) : (
-                        <span />
-                      )}
-                    </div>
-                  ))}
+                        />
+                        <span>{item.unit}</span>
+                        <span>{money(item.price)}</span>
+                        <b>{money(inspectionMaterialAmount(item))}</b>
+                        {!frozen ? (
+                          <button
+                            type="button"
+                            className="icon-btn"
+                            aria-label={`Remove ${item.name}`}
+                            onClick={() =>
+                              setItems((current) =>
+                                current.filter(
+                                  (_, lineIndex) => lineIndex !== index,
+                                ),
+                              )
+                            }
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        ) : (
+                          <span />
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
                 {!frozen && (
                   <select
@@ -3967,12 +4076,28 @@ function InspectionEditor({ inspection: initialInspection }) {
                   </select>
                 )}
               </div>
-              {inspectionService !== "Roof Installation" && (
+              {serviceType !== "Roof Installation" && (
                 <Field
                   label="Additional work"
                   name="additionalWork"
                   type="textarea"
                   value={details.additionalWork || ""}
+                />
+              )}
+              {serviceType !== "Roof Installation" && (
+                <Field
+                  label="Labor requirement / charges (₱)"
+                  name="laborCharges"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={details.laborCharges ?? 0}
+                  onChange={(event) =>
+                    setDetails((current) => ({
+                      ...current,
+                      laborCharges: event.target.value,
+                    }))
+                  }
                 />
               )}
               <Field
@@ -4024,7 +4149,9 @@ function InspectionEditor({ inspection: initialInspection }) {
                     <br />
                   </>
                 )}
-                {inspectionService === "Roof Repair" && (
+                <strong>Labor charges:</strong> {money(labor)}
+                <br />
+                {serviceType === "Roof Repair" && (
                   <>
                     <strong>Repair charges:</strong> {money(repair)}
                     <br />
@@ -4064,6 +4191,9 @@ function InspectionEditor({ inspection: initialInspection }) {
         <>
           <div className="inspection-summary">
             <span>
+              Service: <b>{inspection.serviceType || booking.service}</b>
+            </span>
+            <span>
               <b>{inspection.area || "—"}</b> SQM
             </span>
             <span>
@@ -4074,6 +4204,9 @@ function InspectionEditor({ inspection: initialInspection }) {
               {inspection.complexity || "Complexity not recorded"} ·{" "}
               {inspection.sections || "—"} sections
             </span>
+            {inspection.condition && (
+              <span>Condition: {inspection.condition}</span>
+            )}
             <span>
               Initial estimate:{" "}
               <b>{quote ? money(quote.total) : money(initialEstimate)}</b>
@@ -4084,17 +4217,60 @@ function InspectionEditor({ inspection: initialInspection }) {
               ? "Submitted for Admin review. The quotation editor contains the saved material and price snapshots; Admin may adjust it before sending the final quotation to the client."
               : "This inspection has been completed."}
           </div>
-          <div className="quote-lines">
+          <div className="quote-lines inspection-review-table">
+            <div className="quote-header">
+              <span>Material</span>
+              <span>Thickness</span>
+              <span>Quantity</span>
+              <span>Unit</span>
+              <span>Unit price</span>
+              <span>Amount</span>
+            </div>
             {(inspection.items || []).map((item) => (
               <div className="quote-line" key={item.materialId}>
                 <strong>{item.name}</strong>
+                <span>{item.thickness || "—"}</span>
                 <span>{item.quantity}</span>
                 <span>{item.unit}</span>
                 <span>{money(item.price)}</span>
-                <b>{money(item.quantity * item.price)}</b>
+                <b>{money(inspectionMaterialAmount(item))}</b>
               </div>
             ))}
           </div>
+          {inspection.details && (
+            <section className="card full">
+              <h3>Foreman-provided inspection details</h3>
+              <div className="inspection-summary">
+                {Object.entries(inspection.details).map(([key, value]) => {
+                  const label = key
+                      .replace(/([A-Z])/g, " $1")
+                      .replace(/^./, (character) => character.toUpperCase()),
+                    displayValue = Array.isArray(value)
+                      ? value
+                          .map(
+                            (entry) =>
+                              s.materials.find(
+                                (material) => material.id === entry,
+                              )?.name || entry,
+                          )
+                          .join(", ")
+                      : key === "existingMaterialId"
+                        ? s.materials.find((material) => material.id === value)
+                            ?.name || value
+                        : typeof value === "boolean"
+                          ? value
+                            ? "Yes"
+                            : "No"
+                          : value;
+                  return (
+                    <span key={key}>
+                      <b>{label}:</b> {displayValue || "—"}
+                    </span>
+                  );
+                })}
+              </div>
+            </section>
+          )}
           <Field
             label="Site notes"
             name="notes"
