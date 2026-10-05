@@ -96,7 +96,6 @@ function estimate(s) {
         { materialId: "MAT-2", quantity: 120 },
         { materialId: "MAT-7", quantity: 20 },
       ],
-      charges: 10000,
     },
     foreman,
   );
@@ -104,14 +103,15 @@ function estimate(s) {
 }
 function approved(s) {
   const { b, i, q } = estimate(s);
-  apply(s, "finalize", { id: q.id, downpayment: 24300 }, admin);
+  apply(s, "finalize", { id: q.id }, admin);
   apply(s, "quoteDecision", { id: q.id, token: b.token, status: "Approved" });
   return { b, i, q, p: s.projects.find((p) => p.quotationId === q.id) };
 }
 test("complete booking → inspection → quote → project → payment → feedback workflow", () => {
   const s = seed(),
     { b, q, p } = approved(s);
-  assert.equal(q.total, 81000);
+  assert.equal(q.total, 71000);
+  assert.equal(q.downpayment, 35500);
   assert.equal(p.progress, 0);
   assert.equal(s.usage.filter((u) => u.projectId === p.id).length, 2);
   assert.throws(
@@ -200,6 +200,125 @@ test("complete booking → inspection → quote → project → payment → feed
       }),
     /already/,
   );
+});
+
+test("final quotation sets a 50% requested downpayment without recording payment", () => {
+  const s = seed();
+  const finalizeAt = (total, finalizeData = {}) => {
+    const { b, i, q } = estimate(s);
+    assert.equal(q.downpayment, 0, "initial estimate has no downpayment");
+    assert.throws(
+      () =>
+        apply(
+          s,
+          "estimate",
+          {
+            inspectionId: i.id,
+            items: [{ materialId: "MAT-2", quantity: 100 }],
+            downpayment: 1,
+          },
+          foreman,
+        ),
+      /downpayment: this field cannot be changed/i,
+      "Foreman cannot supply a required downpayment",
+    );
+    assert.throws(
+      () =>
+        apply(
+          s,
+          "finalize",
+          {
+            id: q.id,
+            items: finalizeData.items || [
+              { materialId: "MAT-2", quantity: 100 },
+            ],
+            charges: total - 55000,
+            downpayment: 1,
+          },
+          admin,
+        ),
+      /downpayment: this field cannot be changed/i,
+      "Admin cannot override the calculated amount",
+    );
+    assert.throws(
+      () => apply(s, "finalize", { id: q.id }, foreman),
+      /role/,
+      "Foreman cannot finalize or set the amount",
+    );
+    apply(
+      s,
+      "finalize",
+      {
+        id: q.id,
+        items: finalizeData.items || [{ materialId: "MAT-2", quantity: 100 }],
+        ...(finalizeData.charges
+          ? finalizeData.charges
+          : { charges: total - 55000 }),
+      },
+      admin,
+    );
+    assert.equal(q.total, total);
+    assert.equal(q.downpayment, total * 0.5);
+    assert.equal(q.total - q.downpayment, total * 0.5);
+    assert.equal(
+      s.projects.some((project) => project.bookingId === b.id),
+      false,
+    );
+    assert.equal(
+      s.payments.some((payment) =>
+        s.projects.some(
+          (project) =>
+            project.bookingId === b.id && project.id === payment.projectId,
+        ),
+      ),
+      false,
+    );
+    assert.throws(
+      () =>
+        apply(s, "quoteDecision", {
+          id: q.id,
+          token: b.token,
+          status: "Approved",
+          downpayment: 0,
+        }),
+      /downpayment: this field cannot be changed/i,
+      "Client cannot modify the required amount",
+    );
+    return { b, q };
+  };
+  const hundredThousand = finalizeAt(100000);
+  assert.equal(hundredThousand.q.downpayment, 50000);
+  const oneHundredThirtyThreeThousand = finalizeAt(133000, {
+    items: [
+      { materialId: "MAT-2", quantity: 100 },
+      { materialId: "MAT-7", quantity: 180 },
+    ],
+    charges: {
+      hardwareAttachments: 5000,
+      installationFee: 20000,
+      deliveryCharges: 3000,
+      insulation: 8000,
+      otherCharges: 2000,
+      discount: 5000,
+    },
+  });
+  assert.equal(oneHundredThirtyThreeThousand.q.downpayment, 66500);
+  assert.equal(oneHundredThirtyThreeThousand.q.total, 133000);
+
+  const changed = estimate(s);
+  apply(
+    s,
+    "finalize",
+    {
+      id: changed.q.id,
+      items: [{ materialId: "MAT-2", quantity: 120 }],
+      charges: 54000,
+    },
+    admin,
+  );
+  assert.equal(changed.q.total, 120000);
+  assert.equal(changed.q.downpayment, 60000);
+  assert.equal(changed.q.downpayment, changed.q.total * 0.5);
 });
 test("booking timestamps, token uniqueness, validation and role permissions", () => {
   const s = seed(),
@@ -437,7 +556,7 @@ test("inspection submission creates an initial estimate from catalog price snaps
   assert.equal(q.items[0].price, material.price);
   assert.equal(q.items[0].unit, material.unit);
   assert.equal(q.items[0].quantity, 120);
-  assert.equal(q.total, 120 * material.price + 1000);
+  assert.equal(q.total, 120 * material.price);
   material.price += 100;
   assert.equal(q.items[0].price, material.price - 100);
   assert.ok(
@@ -446,8 +565,8 @@ test("inspection submission creates an initial estimate from catalog price snaps
     ),
   );
 });
-test("service-specific inspection submission applies only relevant charges", () => {
-  for (const [service, details, relevantCharges] of [
+test("service-specific inspection submission excludes charges from the initial material quotation", () => {
+  for (const [service, details] of [
     [
       "Roof Replacement",
       {
@@ -464,7 +583,6 @@ test("service-specific inspection submission applies only relevant charges", () 
         repairCharges: 3000,
         additionalCharges: 500,
       },
-      2500,
     ],
     [
       "Roof Repair",
@@ -481,7 +599,6 @@ test("service-specific inspection submission applies only relevant charges", () 
         repairCharges: 3000,
         additionalCharges: 500,
       },
-      3500,
     ],
   ]) {
     const s = seed(),
@@ -515,15 +632,10 @@ test("service-specific inspection submission applies only relevant charges", () 
       foreman,
     );
     const q = s.quotations.find((quote) => quote.inspectionId === i.id);
-    assert.equal(
-      q.charges,
-      relevantCharges,
-      `${service} includes only its applicable service charges`,
-    );
+    assert.equal(q.charges, 0, `${service} initial quotation is material-only`);
     assert.equal(
       q.total,
-      10 * s.materials.find((material) => material.id === "MAT-2").price +
-        relevantCharges,
+      10 * s.materials.find((material) => material.id === "MAT-2").price,
     );
   }
 });
@@ -548,7 +660,6 @@ test("prices are snapshots; admin changes quantities without replacing saved pri
       id: q.id,
       items: [{ materialId: "MAT-2", quantity: 100 }],
       charges: 1000,
-      downpayment: 20000,
     },
     admin,
   );

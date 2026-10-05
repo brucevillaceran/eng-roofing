@@ -277,7 +277,7 @@ const schemas = {
     "id date serviceType area linear sections profile complexity condition accessories notes clientNotes photos items details",
   estimate: "inspectionId items charges notes",
   finalize:
-    "id items hardwareAttachments installationFee deliveryCharges insulation otherCharges discount charges downpayment notes",
+    "id items hardwareAttachments installationFee deliveryCharges insulation otherCharges discount charges notes",
   quoteDecision: "id token status name",
   project: "id name foremanId employeeIds start end status",
   task: "id projectId name assigneeId start due progress notes required",
@@ -597,26 +597,14 @@ export function validateAction(action, input, { state, user } = {}) {
             "Estimated number of workers",
             { min: 1, max: 1000, decimals: 0 },
           ],
-          [
-            "laborCharges",
-            "Labor charges",
-            { min: 0, max: limits.amount },
-          ],
+          ["laborCharges", "Labor charges", { min: 0, max: limits.amount }],
           [
             "additionalCharges",
             "Additional charges",
             { min: 0, max: limits.amount },
           ],
-          [
-            "removalCharges",
-            "Removal charges",
-            { min: 0, max: limits.amount },
-          ],
-          [
-            "repairCharges",
-            "Repair charges",
-            { min: 0, max: limits.amount },
-          ],
+          ["removalCharges", "Removal charges", { min: 0, max: limits.amount }],
+          ["repairCharges", "Repair charges", { min: 0, max: limits.amount }],
         ])
           if (d.details[key] !== undefined && d.details[key] !== "")
             d.details[key] = numberValue(d.details[key], label, options);
@@ -661,7 +649,6 @@ export function validateAction(action, input, { state, user } = {}) {
         ["charges", "Additional charges"],
       ])
         if (has(key)) num(key, label);
-      if (has("downpayment")) num("downpayment", "Downpayment");
       break;
     case "quoteDecision":
       select("status", "Quotation decision", ["Approved", "Rejected"]);

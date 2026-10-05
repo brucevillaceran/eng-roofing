@@ -248,7 +248,7 @@ export function seed() {
         ],
         charges: total - materialTotal,
         total,
-        downpayment: Math.round(total * 0.3),
+        downpayment: Math.round(total * 0.5),
         status: "Approved",
         createdAt: "2026-09-23T09:00:00.000Z",
         notes: "Roofing installation, delivery and site preparation included.",

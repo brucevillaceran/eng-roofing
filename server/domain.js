@@ -547,10 +547,7 @@ export function apply(s, action, d, actor = {}) {
         "Select materials and enter a positive quantity for each.",
       );
       const total = money(
-        i.items.reduce(
-          (sum, item) => sum + inspectionMaterialAmount(item),
-          0,
-        ),
+        i.items.reduce((sum, item) => sum + inspectionMaterialAmount(item), 0),
       );
       need(
         total <= limits.amount,
@@ -570,7 +567,7 @@ export function apply(s, action, d, actor = {}) {
         })),
         charges: 0,
         total,
-        downpayment: money(total * 0.3),
+        downpayment: 0,
         status: "Initial Estimate",
         notes: i.notes || "",
         createdAt: now(),
@@ -677,7 +674,7 @@ export function apply(s, action, d, actor = {}) {
         items,
         charges: 0,
         total: materialTotal,
-        downpayment: money(materialTotal * 0.3),
+        downpayment: 0,
         status: "Initial Estimate",
         notes: d.notes || "",
         createdAt: now(),
@@ -752,43 +749,44 @@ export function apply(s, action, d, actor = {}) {
       const subtotal = money(materialTotal + additionalCharges);
       need(discount <= subtotal, "Discount cannot exceed the subtotal.");
       q.charges = additionalCharges;
-      q.hardwareAttachments =
-        namedChargeFields.some(([key]) => Object.hasOwn(d, key))
-          ? num(d.hardwareAttachments ?? q.hardwareAttachments ?? 0, "Hardware & Attachments")
-          : q.hardwareAttachments ?? 0;
-      q.installationFee =
-        namedChargeFields.some(([key]) => Object.hasOwn(d, key))
-          ? num(d.installationFee ?? q.installationFee ?? 0, "Installation Fee")
-          : q.installationFee ?? 0;
-      q.deliveryCharges =
-        namedChargeFields.some(([key]) => Object.hasOwn(d, key))
-          ? num(d.deliveryCharges ?? q.deliveryCharges ?? 0, "Delivery Charges")
-          : q.deliveryCharges ?? 0;
-      q.insulation =
-        namedChargeFields.some(([key]) => Object.hasOwn(d, key))
-          ? num(d.insulation ?? q.insulation ?? 0, "Insulation")
-          : q.insulation ?? 0;
-      q.otherCharges =
-        namedChargeFields.some(([key]) => Object.hasOwn(d, key))
-          ? num(d.otherCharges ?? q.otherCharges ?? 0, "Other Charges")
-          : q.otherCharges ?? 0;
+      q.hardwareAttachments = namedChargeFields.some(([key]) =>
+        Object.hasOwn(d, key),
+      )
+        ? num(
+            d.hardwareAttachments ?? q.hardwareAttachments ?? 0,
+            "Hardware & Attachments",
+          )
+        : (q.hardwareAttachments ?? 0);
+      q.installationFee = namedChargeFields.some(([key]) =>
+        Object.hasOwn(d, key),
+      )
+        ? num(d.installationFee ?? q.installationFee ?? 0, "Installation Fee")
+        : (q.installationFee ?? 0);
+      q.deliveryCharges = namedChargeFields.some(([key]) =>
+        Object.hasOwn(d, key),
+      )
+        ? num(d.deliveryCharges ?? q.deliveryCharges ?? 0, "Delivery Charges")
+        : (q.deliveryCharges ?? 0);
+      q.insulation = namedChargeFields.some(([key]) => Object.hasOwn(d, key))
+        ? num(d.insulation ?? q.insulation ?? 0, "Insulation")
+        : (q.insulation ?? 0);
+      q.otherCharges = namedChargeFields.some(([key]) => Object.hasOwn(d, key))
+        ? num(d.otherCharges ?? q.otherCharges ?? 0, "Other Charges")
+        : (q.otherCharges ?? 0);
       q.discount = discount;
       q.total = money(subtotal - discount);
       need(
         q.total <= limits.amount,
         "Quotation total cannot exceed ₱1,000,000,000.",
       );
-      q.downpayment = money(
-        num(d.downpayment ?? money(q.total * 0.3), "Downpayment"),
-      );
-      need(q.downpayment <= q.total, "Downpayment cannot exceed total.");
+      q.downpayment = money(q.total * 0.5);
       q.notes = d.notes ?? q.notes;
       q.status = "Awaiting Client";
       const b = get("bookings", q.bookingId);
       email(
         b,
         "Your final roofing quotation is ready",
-        `Review quotation ${q.id} and approve or reject it using your tracking link.`,
+        `Review quotation ${q.id} and approve or reject it using your tracking link.\n\nFinal quotation total: ₱${q.total.toFixed(2)}\nRequired downpayment (50%): ₱${q.downpayment.toFixed(2)}\nRemaining balance after downpayment: ₱${(q.total - q.downpayment).toFixed(2)}`,
         tracking(b),
       );
       notify(

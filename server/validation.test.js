@@ -411,13 +411,12 @@ test("real workflow API validates every input category, foreign IDs, and rejecte
   await env.action("estimate", {
     inspectionId: inspection.id,
     items: [{ materialId: mat.id, quantity: 10 }],
-    charges: 100.01,
     notes: "  Normal punctuation, preserved!  ",
   });
   const q = (await env.store.read()).quotations[0];
   assert.equal(q.notes, "Normal punctuation, preserved!");
   await env.action("finalize", { id: q.id });
-  assert.equal((await env.store.read()).quotations[0].downpayment, 45.75);
+  assert.equal((await env.store.read()).quotations[0].downpayment, 26.25);
   await env.action(
     "quoteDecision",
     {

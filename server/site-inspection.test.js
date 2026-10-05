@@ -219,7 +219,7 @@ test("roofing sheet selection snapshots catalog thickness and price and calculat
     quote.items.reduce((sum, item) => sum + inspectionMaterialAmount(item), 0),
     67000,
   );
-  assert.equal(quote.total, 68000);
+  assert.equal(quote.total, 67000);
 });
 
 test("installation, replacement, and repair rows support add, edit, and delete", () => {
@@ -269,15 +269,14 @@ test("installation, replacement, and repair rows support add, edit, and delete",
   }
 });
 
-test("replacement and repair submit only used rows and include applicable charges", () => {
-  for (const [serviceType, rows, expectedCharges] of [
+test("replacement and repair submit only used rows in the initial material quotation", () => {
+  for (const [serviceType, rows] of [
     [
       "Roof Replacement",
       [
         { materialId: "MAT-2", quantity: 10 },
         { materialId: "MAT-8", quantity: 2 },
       ],
-      3500,
     ],
     [
       "Roof Repair",
@@ -286,7 +285,6 @@ test("replacement and repair submit only used rows and include applicable charge
         { materialId: "MAT-13", quantity: 2 },
         { materialId: "MAT-12", quantity: 10 },
       ],
-      4500,
     ],
   ]) {
     const { state, booking, inspection } = prepare(serviceType);
@@ -300,7 +298,7 @@ test("replacement and repair submit only used rows and include applicable charge
       (item) => item.inspectionId === inspection.id,
     );
     assert.equal(quote.items.length, rows.length);
-    assert.equal(quote.charges, expectedCharges);
+    assert.equal(quote.charges, 0);
     assert.equal(inspection.status, "Submitted for Review");
     assert.equal(booking.status, "Approved");
     assert.equal(

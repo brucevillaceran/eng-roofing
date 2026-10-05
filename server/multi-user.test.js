@@ -188,10 +188,30 @@ async function project(env, users) {
   await env.action(users.foreman, "estimate", {
     inspectionId: i.id,
     items: [{ materialId: material.id, quantity: 100 }],
-    charges: 5000,
   });
   const q = (await env.store.read()).quotations[0];
-  await env.action(env.admin, "finalize", { id: q.id, downpayment: 10000 });
+  await env.action(
+    users.foreman,
+    "estimate",
+    {
+      inspectionId: i.id,
+      items: [{ materialId: material.id, quantity: 100 }],
+      downpayment: 10000,
+    },
+    400,
+  );
+  await env.action(env.admin, "finalize", { id: q.id, charges: 5000 });
+  assert.equal(q.total, 55000);
+  assert.equal(q.downpayment, 27500);
+  assert.equal((await env.store.read()).payments.length, 0);
+  assert.equal((await env.store.read()).projects.length, 0);
+  await env.action(
+    env.admin,
+    "finalize",
+    { id: q.id, downpayment: 10000 },
+    400,
+  );
+  await env.action(users.client, "finalize", { id: q.id }, 403);
   await env.action(
     users.client2,
     "quoteDecision",
@@ -214,7 +234,7 @@ async function project(env, users) {
   });
   await env.action(env.admin, "payment", {
     projectId: p.id,
-    amount: 10000,
+    amount: q.downpayment,
     method: "Cash",
     date: "2026-10-04",
     reference: "SYNTHETIC-1",

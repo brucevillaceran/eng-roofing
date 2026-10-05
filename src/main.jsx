@@ -2974,7 +2974,7 @@ function ModalContent({ modal }) {
                 <b>{money(pay.total)}</b>
               </div>
               <div>
-                <small>Requested downpayment</small>
+                <small>Required downpayment (50%)</small>
                 <b>{money(q.downpayment)}</b>
               </div>
               <div>
@@ -4127,7 +4127,8 @@ function InspectionEditor({ inspection: initialInspection }) {
               <b>{quote ? money(quote.total) : money(initialEstimate)}</b>
             </span>
             <span>
-              Estimated workers: <b>{inspection.details?.estimatedWorkers ?? "Not set"}</b>
+              Estimated workers:{" "}
+              <b>{inspection.details?.estimatedWorkers ?? "Not set"}</b>
             </span>
           </div>
           <div className="info">
@@ -4367,7 +4368,9 @@ function QuotationEditor({ record, isNew }) {
       installationFee: isNew ? 0 : Number(record.installationFee || 0),
       deliveryCharges: isNew ? 0 : Number(record.deliveryCharges || 0),
       insulation: isNew ? 0 : Number(record.insulation || 0),
-      otherCharges: isNew ? 0 : Number(record.otherCharges || Number(record.charges || 0)),
+      otherCharges: isNew
+        ? 0
+        : Number(record.otherCharges ?? record.charges ?? 0),
       discount: isNew ? 0 : Number(record.discount || 0),
     }),
     [error, setError] = useState(""),
@@ -4385,15 +4388,22 @@ function QuotationEditor({ record, isNew }) {
       (a, x) => a + Number(x.quantity || 0) * Number(x.price || 0),
       0,
     ),
-    additionalCharges = Object.values(charges).reduce(
-      (sum, value) => sum + Number(value || 0),
-      0,
-    ) - Number(charges.discount || 0),
-    subtotal = materialTotal + additionalCharges,
-    total = subtotal - Number(charges.discount || 0);
-  const [downpayment, setDownpayment] = useState(
-    isNew ? 0 : record.downpayment,
-  );
+    chargesTotal = [
+      charges.hardwareAttachments,
+      charges.installationFee,
+      charges.deliveryCharges,
+      charges.insulation,
+      charges.otherCharges,
+    ].reduce((sum, value) => sum + Number(value || 0), 0),
+    subtotal = materialTotal + chargesTotal,
+    total = subtotal - Number(charges.discount || 0),
+    requiredDownpayment = Math.round(total * 0.5 * 100) / 100,
+    remainingAfterDownpayment = total - requiredDownpayment,
+    showAdminCharges = user.role === "Admin" && !isNew,
+    showFinalBreakdown =
+      !isNew &&
+      (user.role === "Admin" ||
+        ["Awaiting Client", "Approved", "Rejected"].includes(record.status));
   return (
     <Modal
       wide
@@ -4413,7 +4423,8 @@ function QuotationEditor({ record, isNew }) {
           {inspection.complexity} · {inspection.sections} sections
         </span>
         <span>
-          Estimated workers: <b>{inspection.details?.estimatedWorkers ?? "Not set"}</b>
+          Estimated workers:{" "}
+          <b>{inspection.details?.estimatedWorkers ?? "Not set"}</b>
         </span>
       </div>
       <div className="info">
@@ -4430,9 +4441,7 @@ function QuotationEditor({ record, isNew }) {
             checkForm(e.currentTarget);
             const form = new FormData(e.currentTarget);
             await act(isNew ? "estimate" : "finalize", {
-              ...(isNew
-                ? { inspectionId: record.id }
-                : { id: record.id, downpayment }),
+              ...(isNew ? { inspectionId: record.id } : { id: record.id }),
               items: items.map(({ materialId, quantity }) => ({
                 materialId,
                 quantity,
@@ -4440,7 +4449,9 @@ function QuotationEditor({ record, isNew }) {
               ...(isNew
                 ? {}
                 : {
-                    hardwareAttachments: Number(charges.hardwareAttachments || 0),
+                    hardwareAttachments: Number(
+                      charges.hardwareAttachments || 0,
+                    ),
                     installationFee: Number(charges.installationFee || 0),
                     deliveryCharges: Number(charges.deliveryCharges || 0),
                     insulation: Number(charges.insulation || 0),
@@ -4545,7 +4556,7 @@ function QuotationEditor({ record, isNew }) {
             <span>Material subtotal</span>
             <b>{money(materialTotal)}</b>
           </div>
-          {!isNew && (
+          {showAdminCharges && (
             <>
               {[
                 ["Hardware & Attachments", "hardwareAttachments"],
@@ -4600,23 +4611,24 @@ function QuotationEditor({ record, isNew }) {
             </>
           )}
           <div className="quote-grand">
-            <span>{isNew ? "Initial material estimate" : "Final quotation total"}</span>
+            <span>
+              {isNew ||
+              (record.status === "Initial Estimate" && user.role !== "Admin")
+                ? "Initial Material Quotation"
+                : "Final Quotation Total"}
+            </span>
             <strong>{money(total)}</strong>
           </div>
-          {!isNew && (
+          {showFinalBreakdown && (
             <div>
-              <span>Requested downpayment (₱)</span>
-              <input
-                onInput={(e) => checkField(e.currentTarget)}
-                aria-label="Requested downpayment"
-                type="number"
-                min="0"
-                max={Math.max(0, total)}
-                step="0.01"
-                value={downpayment}
-                disabled={!editable}
-                onChange={(e) => setDownpayment(e.target.value)}
-              />
+              <span>Required Downpayment (50%)</span>
+              <b>{money(requiredDownpayment)}</b>
+            </div>
+          )}
+          {showFinalBreakdown && (
+            <div>
+              <span>Remaining Balance After Downpayment</span>
+              <b>{money(remainingAfterDownpayment)}</b>
             </div>
           )}
         </div>
@@ -5757,17 +5769,27 @@ function Tracking({ token }) {
                       <b>{money(q.charges)}</b>
                     </div>
                     <div className="line-row">
-                      <strong>Total quotation</strong>
+                      <span>Discount</span>
+                      <b>-{money(q.discount || 0)}</b>
+                    </div>
+                    <div className="line-row">
+                      <strong>Final Quotation Total</strong>
                       <strong>{money(q.total)}</strong>
                     </div>
                     <div className="line-row">
-                      <span>Requested downpayment</span>
+                      <span>Required Downpayment (50%)</span>
                       <b>{money(q.downpayment)}</b>
                     </div>
                     <div className="line-row">
-                      <span>Remaining balance</span>
-                      <b>{money(data.balance ?? q.total)}</b>
+                      <span>Remaining Balance After Downpayment</span>
+                      <b>{money(q.total - q.downpayment)}</b>
                     </div>
+                    {p && (
+                      <div className="line-row">
+                        <span>Outstanding project balance</span>
+                        <b>{money(data.balance)}</b>
+                      </div>
+                    )}
                     <p className="muted">{q.notes}</p>
                     {user?.role === "Client" &&
                       q.status === "Awaiting Client" && (
