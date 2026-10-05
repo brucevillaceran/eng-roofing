@@ -155,6 +155,78 @@ export function apply(s, action, d, actor = {}) {
     deny(b.clientId === actor.id, "This booking belongs to another client.");
     return b;
   };
+  const updateInspection = (inspection, data) => {
+    for (const key of [
+      "date",
+      "area",
+      "linear",
+      "sections",
+      "profile",
+      "complexity",
+      "condition",
+      "accessories",
+      "notes",
+      "clientNotes",
+      "photos",
+    ])
+      if (data[key] !== undefined) inspection[key] = data[key];
+    if (data.details) {
+      const priorDetails = inspection.details || {},
+        priorAccessories = new Set(priorDetails.existingAccessoryIds || []);
+      inspection.details = { ...priorDetails, ...data.details };
+      for (const materialId of inspection.details.existingAccessoryIds || []) {
+        const material = get("materials", materialId);
+        need(
+          material.category === "Accessory" &&
+            (material.active || priorAccessories.has(materialId)),
+          "Choose existing accessories from active Material Management records.",
+        );
+      }
+      if (inspection.details.existingMaterialId) {
+        const material = get(
+          "materials",
+          inspection.details.existingMaterialId,
+        );
+        need(
+          material.active ||
+            priorDetails.existingMaterialId ===
+              inspection.details.existingMaterialId,
+          "Choose an active material for the existing roof.",
+        );
+      }
+    }
+    if (data.items) {
+      const prior = new Map(
+        (inspection.items || []).map((item) => [item.materialId, item]),
+      );
+      inspection.items = data.items.map((line) => {
+        const material = get("materials", line.materialId),
+          old = prior.get(material.id);
+        need(
+          material.active || old,
+          "Disabled materials cannot be added to an inspection.",
+        );
+        return {
+          materialId: material.id,
+          name: old?.name || material.name,
+          unit: old?.unit || material.unit,
+          quantity: line.quantity,
+          price: old?.price ?? material.price,
+        };
+      });
+    }
+  };
+  const inspectionCharges = (booking, details = {}) => {
+    const removal =
+        booking.service === "Roof Replacement" &&
+        (details.removalRequired || details.disposalRequired)
+          ? details.removalCharges || 0
+          : 0,
+      repairs =
+        booking.service === "Roof Repair" ? details.repairCharges || 0 : 0,
+      additional = details.additionalCharges || 0;
+    return money(removal + repairs + additional);
+  };
   // Check private ownership before reporting field errors for another user's record.
   if (actor.role === "Foreman") {
     if (["inspection", "estimate"].includes(action)) {
@@ -340,8 +412,106 @@ export function apply(s, action, d, actor = {}) {
       ]);
       break;
     }
-    case "inspection": {
+    case "inspectionDraft":
+    case "inspectionSubmit": {
       permit("Foreman", "Admin");
+      const i = get("inspections", d.id),
+        b = get("bookings", i.bookingId);
+      need(bookingCanBeTracked(b), "Only approved bookings can be inspected.");
+      if (actor.role === "Foreman")
+        deny(
+          i.foremanId === actor.id,
+          "Inspection is assigned to another foreman.",
+        );
+      need(
+        !["Completed", "Submitted for Review"].includes(i.status) &&
+          !s.quotations.some((q) => q.inspectionId === i.id),
+        "This inspection has already been submitted for review.",
+      );
+      updateInspection(i, d);
+      if (action === "inspectionDraft") {
+        i.status = "In Progress";
+        break;
+      }
+      need(
+        i.foremanId,
+        "Assign an inspector before submitting the inspection.",
+      );
+      need(i.date, "Enter the inspection date.");
+      need(i.area > 0, "Roof area must be greater than zero.");
+      need(i.linear > 0, "Linear measurement must be greater than zero.");
+      need(
+        Number.isInteger(i.sections) && i.sections > 0,
+        "Number of roof sections must be a positive whole number.",
+      );
+      need(
+        i.profile && i.profile !== "Not Determined",
+        "Select the roof profile.",
+      );
+      need(i.complexity, "Select the roof complexity.");
+      const details = i.details || {};
+      if (b.service === "Roof Installation")
+        need(
+          details.supportingCondition,
+          "Enter the supporting structure condition.",
+        );
+      if (b.service === "Roof Replacement") {
+        need(i.condition, "Enter the existing roof condition.");
+        need(
+          details.existingProfile &&
+            details.existingProfile !== "Not Determined",
+          "Select the existing roof profile.",
+        );
+        need(details.structuralCondition, "Enter the structural condition.");
+        need(details.replacementScope, "Select the replacement scope.");
+        need(details.structuralWork, "Select the structural work required.");
+      }
+      if (b.service === "Roof Repair") {
+        need(i.condition, "Enter the existing roof condition.");
+        need(
+          details.existingProfile &&
+            details.existingProfile !== "Not Determined",
+          "Select the existing roof profile.",
+        );
+        need(details.damageType, "Enter the damage type.");
+        need(details.damageSeverity, "Select the damage severity.");
+        need(details.repairType, "Select the repair type.");
+      }
+      need(
+        i.items?.length && i.items.every((item) => Number(item.quantity) > 0),
+        "Select materials and enter a positive quantity for each.",
+      );
+      const charges = inspectionCharges(b, details),
+        total = money(
+          i.items.reduce((sum, item) => sum + item.quantity * item.price, 0) +
+            charges,
+        );
+      need(
+        total <= limits.amount,
+        "Initial estimate exceeds the allowed amount.",
+      );
+      i.status = "Submitted for Review";
+      s.quotations.push({
+        id: id("QT"),
+        bookingId: b.id,
+        inspectionId: i.id,
+        items: i.items.map((item) => ({ ...item })),
+        charges,
+        total,
+        downpayment: money(total * 0.3),
+        status: "Initial Estimate",
+        notes: i.notes || "",
+        createdAt: now(),
+      });
+      notify(
+        "Admin",
+        "Inspection submitted for review",
+        `${b.name} · ${b.service} · Initial estimate ${total}`,
+      );
+      break;
+    }
+    case "inspection": {
+      permit("Admin");
       const i = get("inspections", d.id);
       const b = get("bookings", i.bookingId);
       need(bookingCanBeTracked(b), "Only approved bookings can be inspected.");

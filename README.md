@@ -8,6 +8,8 @@ React + Vite frontend, Node.js + Express backend, **MySQL/MariaDB via mysql2 con
 
 Guest and Client booking requests start as **Pending**. Admin reviews the submitted details and explicitly approves or rejects each request. A pending request has no client-visible tracking link; the server denies tracking for pending and rejected bookings even if a token is known. Approval creates an unassigned Site Inspection item and adds a Track My Project link to the local email outbox for the submitted contact email. Admin assigns an active Foreman from Site Inspections before the inspection can be completed and quoted. Rejections are recorded in the same outbox without a tracking link. Registered Clients continue to manage their work from the authenticated portal.
 
+Assigned Foremen save inspection drafts and submit completed inspection findings for Admin review. Service-specific findings, measurements, selected Material Management items, quantities, and unit-price snapshots are stored with the inspection. Submission creates the existing `Initial Estimate` quotation from those snapshots and applicable charges. Admin reviews and adjusts that quotation using the existing quotation editor before it is finalized and sent to the client; the estimate is never automatically approved or converted into a project.
+
 ## XAMPP / phpMyAdmin setup
 
 Requires **Node.js 24+**, npm, and MySQL 8+ or MariaDB 10.4+ (verified with MariaDB 10.11.18). XAMPP supplies Apache, PHP, and MySQL/MariaDB; Node still runs ENG Roofing.
@@ -119,7 +121,7 @@ npm start     # Express serves the production API and built frontend
 | Communications           | `notifications` → recipient user; `emails` is the existing local outbox                                              |
 | Configuration            | `settings`, `migrations`, `app_state` (transaction lock/revision)                                                    |
 
-Business fields have individual SQL columns and relationships have foreign keys. JSON is limited to media arrays, facial descriptors, inspection accessory selections, and `_fields` metadata containing **key names**, which preserves absent versus empty legacy fields. `_position` preserves existing ordering. ISO timestamps map to UTC `DATETIME(3)`; dates use `DATE`, booleans use `BOOLEAN`, session expirations remain epoch milliseconds. Numeric columns use `DOUBLE` to preserve the current JavaScript/SQLite numerical behavior; existing domain rounding and financial calculations are unchanged. `server/seed.js` remains a synthetic test fixture and is never loaded by runtime startup.
+Business fields have individual SQL columns and relationships have foreign keys. JSON stores media arrays, facial descriptors, inspection accessory selections, service-specific inspection details, catalog-priced inspection material snapshots, and `_fields` metadata containing **key names**, which preserves absent versus empty legacy fields. `_position` preserves existing ordering. ISO timestamps map to UTC `DATETIME(3)`; dates use `DATE`, booleans use `BOOLEAN`, session expirations remain epoch milliseconds. Numeric columns use `DOUBLE` to preserve the current JavaScript/SQLite numerical behavior; existing domain rounding and financial calculations are unchanged. `server/seed.js` remains a synthetic test fixture and is never loaded by runtime startup.
 
 ## Validation and Employee enrollment
 

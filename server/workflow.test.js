@@ -44,6 +44,7 @@ function apply(s, action, data, actor) {
 const admin = { id: "USR-1", role: "Admin" },
   foreman = { id: "USR-2", role: "Foreman" },
   employee = { id: "USR-3", role: "Employee" };
+const today = () => new Date().toISOString().slice(0, 10);
 const booking = () => ({
   name: "Test Roofing Client",
   email: "synthetic@example.test",
@@ -84,7 +85,7 @@ function estimate(s) {
       complexity: "Moderate",
       accessories: ["Ridge Cap"],
     },
-    foreman,
+    admin,
   );
   apply(
     s,
@@ -350,22 +351,172 @@ test("pending bookings cannot be assigned or inspected through direct actions", 
     () =>
       apply(
         s,
-        "inspection",
+        "inspectionSubmit",
         {
           id: i.id,
           date: new Date().toISOString().slice(0, 10),
-          area: 100,
-          linear: 30,
-          sections: 2,
-          profile: "Rib-Type / Ribbed",
-          complexity: "Simple",
-          condition: "Damaged",
-          accessories: [],
         },
         foreman,
       ),
     /approved bookings/,
   );
+});
+test("inspection submission creates an initial estimate from catalog price snapshots", () => {
+  const s = seed();
+  const receipt = domainApply(s, "book", {
+    ...booking(),
+    service: "Roof Installation",
+  });
+  const b = s.bookings.find((booking) => booking.id === receipt.id);
+  apply(s, "bookingDecision", { id: b.id, status: "Approved" }, admin);
+  const i = s.inspections.find((inspection) => inspection.bookingId === b.id);
+  apply(
+    s,
+    "inspectionAssign",
+    { id: i.id, foremanId: foreman.id, date: today() },
+    admin,
+  );
+  assert.throws(
+    () =>
+      apply(
+        s,
+        "inspection",
+        {
+          id: i.id,
+          area: 50,
+          linear: 20,
+          sections: 1,
+          profile: "Corrugated",
+          complexity: "Simple",
+          condition: "Good",
+        },
+        foreman,
+      ),
+    /unavailable for your role/,
+  );
+  const material = s.materials.find((item) => item.id === "MAT-2");
+  const submission = {
+    id: i.id,
+    date: today(),
+    area: 120,
+    linear: 40,
+    sections: 2,
+    profile: "Rib-Type / Ribbed",
+    complexity: "Moderate",
+    details: {
+      supportingCondition: "Good",
+      additionalCharges: 1000,
+    },
+    items: [{ materialId: material.id, quantity: 120 }],
+    photos: [],
+  };
+  for (const invalid of [
+    { ...submission, area: 0 },
+    { ...submission, linear: -1 },
+    { ...submission, sections: 1.5 },
+    { ...submission, items: [{ materialId: material.id, quantity: 0 }] },
+    {
+      ...submission,
+      details: { ...submission.details, additionalCharges: -1 },
+    },
+    {
+      ...submission,
+      items: [{ materialId: material.id, quantity: 120, price: 1 }],
+    },
+  ])
+    assert.throws(() => apply(s, "inspectionSubmit", invalid, foreman));
+  assert.equal(
+    s.quotations.some((quote) => quote.inspectionId === i.id),
+    false,
+  );
+  apply(s, "inspectionSubmit", submission, foreman);
+  const q = s.quotations.find((quote) => quote.inspectionId === i.id);
+  assert.equal(i.status, "Submitted for Review");
+  assert.equal(q.status, "Initial Estimate");
+  assert.equal(q.items[0].price, material.price);
+  assert.equal(q.items[0].unit, material.unit);
+  assert.equal(q.items[0].quantity, 120);
+  assert.equal(q.total, 120 * material.price + 1000);
+  material.price += 100;
+  assert.equal(q.items[0].price, material.price - 100);
+  assert.ok(
+    s.notifications.some((notification) =>
+      notification.title.includes("submitted for review"),
+    ),
+  );
+});
+test("service-specific inspection submission applies only relevant charges", () => {
+  for (const [service, details, relevantCharges] of [
+    [
+      "Roof Replacement",
+      {
+        existingProfile: "Corrugated",
+        structuralCondition: "Fair",
+        replacementScope: "Full Roof Replacement",
+        structuralWork: "Minor Repair",
+        removalRequired: true,
+        disposalRequired: true,
+        removalCharges: 2000,
+        repairCharges: 3000,
+        additionalCharges: 500,
+      },
+      2500,
+    ],
+    [
+      "Roof Repair",
+      {
+        existingProfile: "Corrugated",
+        damageType: "Leak",
+        damageSeverity: "Moderate",
+        repairType: "Leak Repair",
+        removalCharges: 2000,
+        repairCharges: 3000,
+        additionalCharges: 500,
+      },
+      3500,
+    ],
+  ]) {
+    const s = seed(),
+      receipt = domainApply(s, "book", { ...booking(), service });
+    const b = s.bookings.find((booking) => booking.id === receipt.id);
+    apply(s, "bookingDecision", { id: b.id, status: "Approved" }, admin);
+    const i = s.inspections.find((inspection) => inspection.bookingId === b.id);
+    apply(
+      s,
+      "inspectionAssign",
+      { id: i.id, foremanId: foreman.id, date: today() },
+      admin,
+    );
+    apply(
+      s,
+      "inspectionSubmit",
+      {
+        id: i.id,
+        date: today(),
+        area: 50,
+        linear: 20,
+        sections: 1,
+        profile: "Corrugated",
+        complexity: "Simple",
+        condition: "Damaged",
+        details,
+        items: [{ materialId: "MAT-2", quantity: 10 }],
+        photos: [],
+      },
+      foreman,
+    );
+    const q = s.quotations.find((quote) => quote.inspectionId === i.id);
+    assert.equal(
+      q.charges,
+      relevantCharges,
+      `${service} includes only its applicable service charges`,
+    );
+    assert.equal(
+      q.total,
+      10 * s.materials.find((material) => material.id === "MAT-2").price +
+        relevantCharges,
+    );
+  }
 });
 test("prices are snapshots; admin changes quantities without replacing saved prices", () => {
   const s = seed(),

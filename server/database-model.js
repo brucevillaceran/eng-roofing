@@ -1,5 +1,5 @@
-// Explicit relational mapping. JSON is limited to variable-length media/biometrics
-// and key-presence metadata needed to round-trip legacy optional fields exactly.
+// Explicit relational mapping. JSON stores variable-length inspection details,
+// material snapshots, media/biometrics and key-presence metadata.
 const fields = (definition) =>
   Object.fromEntries(
     definition
@@ -18,7 +18,7 @@ export const models = Object.fromEntries(
     bookings:
       "clientId:ref-users name email phone address date:date time service type description status submitted_at:instant token:token photos:json",
     inspections:
-      "bookingId:ref-bookings foremanId:ref-users date:date status area:number linear:number sections:int profile complexity condition notes clientNotes accessories:json photos:json",
+      "bookingId:ref-bookings foremanId:ref-users date:date status area:number linear:number sections:int profile complexity condition notes clientNotes accessories:json photos:json items:json details:json",
     quotations:
       "bookingId:ref-bookings inspectionId:ref-inspections charges:number total:number downpayment:number status notes createdAt:instant",
     projects:

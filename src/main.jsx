@@ -77,7 +77,7 @@ import {
   PolarRadiusAxis,
 } from "recharts";
 import QRCode from "qrcode";
-import { profiles, accessories } from "../shared/roofing.js";
+import { profiles } from "../shared/roofing.js";
 import "./style.css";
 import {
   validateAction,
@@ -177,7 +177,7 @@ const allowed = {
 function Badge({ children }) {
   return (
     <span
-      className={`badge ${["Ongoing", "Approved", "Completed", "Fully Paid", "Active", "Paid"].includes(children) ? "green" : ["Pending", "Awaiting Assignment", "Awaiting Client", "Initial Estimate", "Partially Paid", "Scheduled", "For Inspection", "Rescheduled"].includes(children) ? "amber" : ["Rejected", "Cancelled", "Unpaid", "On Hold", "Disabled"].includes(children) ? "red" : "gray"}`}
+      className={`badge ${["Ongoing", "Approved", "Completed", "Fully Paid", "Active", "Paid"].includes(children) ? "green" : ["Pending", "Awaiting Assignment", "In Progress", "Submitted for Review", "Awaiting Client", "Initial Estimate", "Partially Paid", "Scheduled", "For Inspection", "Rescheduled"].includes(children) ? "amber" : ["Rejected", "Cancelled", "Unpaid", "On Hold", "Disabled"].includes(children) ? "red" : "gray"}`}
     >
       <i />
       {children}
@@ -1918,6 +1918,23 @@ function ModulePage({ page }) {
                               : "Inspect"}
                         </Button>
                         {user.role !== "Client" &&
+                          i.status === "Submitted for Review" &&
+                          s.quotations.find((q) => q.inspectionId === i.id) && (
+                            <Button
+                              variant="small"
+                              onClick={() =>
+                                setModal({
+                                  type: "quotation",
+                                  record: s.quotations.find(
+                                    (q) => q.inspectionId === i.id,
+                                  ),
+                                })
+                              }
+                            >
+                              Review initial estimate
+                            </Button>
+                          )}
+                        {user.role !== "Client" &&
                           i.status === "Completed" &&
                           !s.quotations.some(
                             (q) => q.inspectionId === i.id,
@@ -2517,8 +2534,6 @@ function ModalContent({ modal }) {
     r = modal.record;
   const [selected, setSelected] = useState(r?.projectId || r?.id || ""),
     [chosen, setChosen] = useState(r?.employeeIds || []),
-    [checks, setChecks] = useState(r?.accessories || []),
-    [photos, setPhotos] = useState(r?.photo ? [r.photo] : r?.photos || []),
     [bookingService, setBookingService] = useState(r?.service || services[0]),
     [decisionError, setDecisionError] = useState("");
   let content,
@@ -2666,200 +2681,7 @@ function ModalContent({ modal }) {
     );
   }
   if (modal.type === "inspection") {
-    title = "Site inspection";
-    const b = s.bookings.find((b) => b.id === r.bookingId);
-    subtitle = `${r.id} · ${b.name} · ${b.service}`;
-    if (user.role === "Client")
-      return (
-        <Modal
-          title="Site inspection"
-          subtitle={`${r.id} · ${day(r.date)}`}
-          onClose={close}
-        >
-          <Badge>{r.status}</Badge>
-          <p>Roof profile: {r.profile || "Pending inspection"}</p>
-          <p>Roof area: {r.area || 0} SQM</p>
-          <p>Condition: {r.condition || "Pending inspection"}</p>
-          <p>{r.notes || "No published inspection notes yet."}</p>
-        </Modal>
-      );
-    const frozen = s.quotations.some((q) => q.inspectionId === r.id);
-    const assigned = !!r.foremanId;
-    content = (
-      <>
-        <div className="info">
-          <MapPin size={17} />
-          {b.address}
-        </div>
-        {user.role === "Admin" && !frozen && r.status !== "Completed" && (
-          <Form
-            onSubmit={(d) => act("inspectionAssign", { ...d, id: r.id })}
-            submit={assigned ? "Update inspector" : "Assign inspector"}
-          >
-            <Field
-              label="Inspector"
-              name="foremanId"
-              value={r.foremanId || ""}
-              options={s.users
-                .filter((u) => u.role === "Foreman" && u.active !== false)
-                .map((u) => ({ value: u.id, label: u.name }))}
-              required
-            />
-            <Field
-              label="Inspection date"
-              name="date"
-              type="date"
-              min={today()}
-              value={r.date || b.date}
-              required
-            />
-          </Form>
-        )}
-        {assigned ? (
-          <Form
-            onSubmit={(d) =>
-              act("inspection", { ...d, id: r.id, accessories: checks, photos })
-            }
-            submit="Complete inspection"
-            disabled={frozen}
-          >
-            <Field
-              label="Results shared with the client"
-              name="clientNotes"
-              type="textarea"
-              value={r.clientNotes}
-              disabled={frozen}
-            />
-            <Field
-              label="Inspection date"
-              max={today()}
-              name="date"
-              type="date"
-              value={r.date}
-              required
-              disabled={frozen}
-            />
-            <Field
-              label="Roof area (SQM)"
-              name="area"
-              type="number"
-              step="0.01"
-              min="0.01"
-              value={r.area}
-              required
-              disabled={frozen}
-            />
-            <Field
-              label="Linear measurement (LM)"
-              name="linear"
-              type="number"
-              step="0.01"
-              min="0"
-              value={r.linear}
-              required
-              disabled={frozen}
-            />
-            <Field
-              label="Roof type / profile"
-              name="profile"
-              options={profiles}
-              value={r.profile}
-              required
-              disabled={frozen}
-            />
-            <Field
-              label="Roof complexity"
-              name="complexity"
-              options={["Simple", "Moderate", "Complex"]}
-              value={r.complexity}
-              disabled={frozen}
-            />
-            <Field
-              label="Number of roof sections"
-              name="sections"
-              type="number"
-              min="1"
-              step="1"
-              value={r.sections}
-              required
-              disabled={frozen}
-            />
-            <Field
-              label={
-                b.service === "Roof Installation"
-                  ? "Supporting structure condition"
-                  : "Existing roof condition"
-              }
-              name="condition"
-              options={
-                b.service === "Roof Installation"
-                  ? [
-                      "New / No Existing Structure",
-                      "Good",
-                      "Fair",
-                      "Needs Repair",
-                      "Requires Further Assessment",
-                    ]
-                  : [
-                      "Good",
-                      "Fair",
-                      "Damaged",
-                      "Severely Damaged",
-                      "Requires Further Assessment",
-                    ]
-              }
-              value={r.condition}
-              required
-              disabled={frozen}
-            />
-            <div className="full">
-              <h4>Required accessories</h4>
-              <div className="checkbox-grid">
-                {accessories.map((a) => (
-                  <label key={a}>
-                    <input
-                      type="checkbox"
-                      disabled={frozen}
-                      checked={checks.includes(a)}
-                      onChange={(e) =>
-                        setChecks(
-                          e.target.checked
-                            ? [...checks, a]
-                            : checks.filter((x) => x !== a),
-                        )
-                      }
-                    />
-                    {a}
-                  </label>
-                ))}
-              </div>
-            </div>
-            <Field
-              label="Site notes / roof sections"
-              name="notes"
-              type="textarea"
-              value={r.notes}
-              disabled={frozen}
-            />
-            <PhotoUpload
-              photos={photos}
-              onChange={setPhotos}
-              disabled={frozen}
-            />
-            {frozen && (
-              <div className="info full">
-                This inspection is preserved because an estimate has been
-                created.
-              </div>
-            )}
-          </Form>
-        ) : (
-          <div className="info">
-            Assign an inspector before the site inspection can be completed.
-          </div>
-        )}
-      </>
-    );
+    return <InspectionEditor inspection={r} />;
   }
   if (modal.type === "material") {
     title = r ? "Edit material" : "Add material";
@@ -3465,6 +3287,797 @@ function ModalContent({ modal }) {
       wide={wide}
     >
       {content}
+    </Modal>
+  );
+}
+function InspectionEditor({ inspection: initialInspection }) {
+  const { s, user, act, setModal } = useApp(),
+    inspection =
+      s.inspections.find((item) => item.id === initialInspection.id) ||
+      initialInspection,
+    booking = s.bookings.find((item) => item.id === inspection.bookingId),
+    [items, setItems] = useState(
+      (inspection.items || []).map((item) => ({ ...item })),
+    ),
+    [details, setDetails] = useState(inspection.details || {}),
+    [photos, setPhotos] = useState(inspection.photos || []),
+    [error, setError] = useState(""),
+    [busy, setBusy] = useState(false),
+    form = useRef(null),
+    quote = s.quotations.find((item) => item.inspectionId === inspection.id),
+    assignedInspector = s.users.find((u) => u.id === inspection.foremanId),
+    submitted = inspection.status === "Submitted for Review" || !!quote,
+    editable =
+      user.role === "Admin" ||
+      (user.role === "Foreman" && inspection.foremanId === user.id),
+    frozen =
+      !editable ||
+      submitted ||
+      inspection.status === "Completed" ||
+      (user.role === "Foreman" && !inspection.foremanId),
+    totalMaterials = items.reduce(
+      (total, item) =>
+        total + Number(item.quantity || 0) * Number(item.price || 0),
+      0,
+    ),
+    removal = Number(details.removalCharges || 0),
+    repair = Number(details.repairCharges || 0),
+    additional = Number(details.additionalCharges || 0),
+    includeRemoval =
+      booking.service === "Roof Replacement" &&
+      (details.removalRequired === true || details.disposalRequired === true),
+    totalCharges =
+      (includeRemoval ? removal : 0) +
+      (booking.service === "Roof Repair" ? repair : 0) +
+      additional,
+    initialEstimate = totalMaterials + totalCharges;
+  const accessories = s.materials.filter(
+    (material) => material.active && material.category === "Accessory",
+  );
+  const addMaterial = (materialId) => {
+    const material = s.materials.find((item) => item.id === materialId);
+    if (material && !items.some((item) => item.materialId === material.id))
+      setItems([
+        ...items,
+        {
+          materialId: material.id,
+          name: material.name,
+          unit: material.unit,
+          price: material.price,
+          quantity: "",
+        },
+      ]);
+  };
+  const save = async (submit) => {
+    setError("");
+    setBusy(true);
+    try {
+      const raw = Object.fromEntries(new FormData(form.current).entries()),
+        detailsData = { ...details };
+      for (const key of [
+        "supportingCondition",
+        "supportingNotes",
+        "structuralCondition",
+        "existingMaterialId",
+        "existingProfile",
+        "existingArea",
+        "existingDamage",
+        "removalRequired",
+        "replacementScope",
+        "structuralWork",
+        "disposalRequired",
+        "damagedArea",
+        "damageType",
+        "damageSeverity",
+        "damagedSheets",
+        "repairType",
+        "removalCharges",
+        "repairCharges",
+        "additionalCharges",
+        "additionalWork",
+      ]) {
+        if (raw[key] !== undefined) {
+          detailsData[key] = ["removalRequired", "disposalRequired"].includes(
+            key,
+          )
+            ? raw[key] === "true"
+            : raw[key];
+          delete raw[key];
+        }
+      }
+      for (const key of ["area", "linear", "sections", "date"])
+        if (raw[key] === "") delete raw[key];
+      await act(
+        submit ? "inspectionSubmit" : "inspectionDraft",
+        {
+          id: inspection.id,
+          ...raw,
+          items,
+          details: {
+            ...detailsData,
+            existingAccessoryIds: details.existingAccessoryIds || [],
+          },
+          photos,
+        },
+        true,
+      );
+      if (submit) setModal(null);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const section = (title, content) => (
+    <section className="card full" key={title}>
+      <h3>{title}</h3>
+      <div className="form-grid">{content}</div>
+    </section>
+  );
+  return (
+    <Modal
+      wide
+      title="Site inspection"
+      subtitle={`${inspection.id} · ${booking.name} · ${booking.service}`}
+      onClose={() => setModal(null)}
+    >
+      <div className="inspection-summary">
+        <span>
+          <b>{booking.type}</b> project
+        </span>
+        <span>{booking.service}</span>
+        <span>{booking.address}</span>
+        <span>
+          Assigned: {assignedInspector?.name || "Awaiting assignment"}
+        </span>
+        <span>
+          Inspection date: {inspection.date ? day(inspection.date) : "Not set"}
+        </span>
+        <Badge>{inspection.status}</Badge>
+      </div>
+      {user.role === "Admin" &&
+        inspection.status !== "Completed" &&
+        !submitted && (
+          <Form
+            onSubmit={(data) =>
+              act("inspectionAssign", { ...data, id: inspection.id })
+            }
+            submit={
+              inspection.foremanId ? "Update inspector" : "Assign inspector"
+            }
+          >
+            <Field
+              label="Assign inspector"
+              name="foremanId"
+              value={inspection.foremanId || ""}
+              options={s.users
+                .filter((u) => u.role === "Foreman" && u.active !== false)
+                .map((u) => ({ value: u.id, label: u.name }))}
+              required
+            />
+            <Field
+              label="Inspection date"
+              name="date"
+              type="date"
+              min={today()}
+              value={inspection.date || booking.date}
+              required
+            />
+          </Form>
+        )}
+      {section(
+        "Project information",
+        <>
+          <Field label="Booking" name="booking" value={booking.id} disabled />
+          <Field label="Client" name="client" value={booking.name} disabled />
+          <Field
+            label="Project type"
+            name="projectType"
+            value={booking.type}
+            disabled
+          />
+          <Field
+            label="Service"
+            name="service"
+            value={booking.service}
+            disabled
+          />
+          <Field
+            label="Assigned inspector"
+            name="assignedInspector"
+            value={assignedInspector?.name || "Unassigned"}
+            disabled
+          />
+          <Field
+            label="Site address"
+            name="siteAddress"
+            value={booking.address}
+            disabled
+          />
+        </>,
+      )}
+      {!frozen ? (
+        <form
+          ref={form}
+          noValidate
+          onSubmit={(event) => {
+            event.preventDefault();
+            save(true);
+          }}
+        >
+          {section(
+            "Roof measurements",
+            <>
+              <Field
+                label="Inspection date"
+                name="date"
+                type="date"
+                max={today()}
+                value={inspection.date || today()}
+              />
+              <Field
+                label="Roof area (SQM)"
+                name="area"
+                type="number"
+                min="0.01"
+                max="1000000"
+                step="0.01"
+                value={inspection.area || ""}
+              />
+              <Field
+                label="Linear measurement (LM)"
+                name="linear"
+                type="number"
+                min="0.01"
+                max="1000000"
+                step="0.01"
+                value={inspection.linear || ""}
+              />
+              <Field
+                label="Number of roof sections"
+                name="sections"
+                type="number"
+                min="1"
+                max="10000"
+                step="1"
+                value={inspection.sections || ""}
+              />
+              <Field
+                label="Roof type / profile"
+                name="profile"
+                options={profiles}
+                value={inspection.profile || ""}
+              />
+              <Field
+                label="Roof complexity"
+                name="complexity"
+                options={["Simple", "Moderate", "Complex", "Highly Complex"]}
+                value={inspection.complexity || ""}
+              />
+            </>,
+          )}
+          {booking.service === "Roof Installation" &&
+            section(
+              "Supporting structure condition",
+              <>
+                <Field
+                  label="Supporting structure condition"
+                  name="supportingCondition"
+                  options={[
+                    "New / No Existing Structure",
+                    "Good",
+                    "Fair",
+                    "Needs Repair",
+                    "Requires Further Assessment",
+                  ]}
+                  value={details.supportingCondition || ""}
+                />
+                <Field
+                  label="Supporting structure notes"
+                  name="supportingNotes"
+                  type="textarea"
+                  value={details.supportingNotes || ""}
+                />
+              </>,
+            )}
+          {booking.service === "Roof Replacement" &&
+            section(
+              "Existing roof and replacement scope",
+              <>
+                <Field
+                  label="Existing roofing material"
+                  name="existingMaterialId"
+                  value={details.existingMaterialId || ""}
+                  options={s.materials
+                    .filter((material) => material.active)
+                    .map((material) => ({
+                      value: material.id,
+                      label: `${material.name} · ${material.unit}`,
+                    }))}
+                />
+                <Field
+                  label="Existing roof type / profile"
+                  name="existingProfile"
+                  options={profiles}
+                  value={details.existingProfile || ""}
+                />
+                <Field
+                  label="Existing roof condition"
+                  name="condition"
+                  options={[
+                    "Good",
+                    "Fair",
+                    "Damaged",
+                    "Severely Damaged",
+                    "Requires Further Assessment",
+                  ]}
+                  value={inspection.condition || ""}
+                />
+                <Field
+                  label="Existing roof area (SQM)"
+                  name="existingArea"
+                  type="number"
+                  min="0.01"
+                  step="0.01"
+                  value={details.existingArea || ""}
+                />
+                <Field
+                  label="Existing roof damage"
+                  name="existingDamage"
+                  type="textarea"
+                  value={details.existingDamage || ""}
+                />
+                <Field
+                  label="Replacement scope"
+                  name="replacementScope"
+                  options={[
+                    "Full Roof Replacement",
+                    "Partial Roof Replacement",
+                  ]}
+                  value={details.replacementScope || ""}
+                />
+                <Field
+                  label="Structural work"
+                  name="structuralWork"
+                  options={[
+                    "None",
+                    "Minor Repair",
+                    "Requires Further Assessment",
+                  ]}
+                  value={details.structuralWork || ""}
+                />
+                <Field
+                  label="Structural condition"
+                  name="structuralCondition"
+                  options={[
+                    "Good",
+                    "Fair",
+                    "Damaged",
+                    "Severely Damaged",
+                    "Requires Further Assessment",
+                  ]}
+                  value={details.structuralCondition || ""}
+                />
+                <Field
+                  label="Roof removal required"
+                  name="removalRequired"
+                  value={String(details.removalRequired ?? false)}
+                  options={[
+                    { value: "true", label: "Yes" },
+                    { value: "false", label: "No" },
+                  ]}
+                  onChange={(event) =>
+                    setDetails((current) => ({
+                      ...current,
+                      removalRequired: event.target.value === "true",
+                    }))
+                  }
+                />
+                <Field
+                  label="Disposal required"
+                  name="disposalRequired"
+                  value={String(details.disposalRequired ?? false)}
+                  options={[
+                    { value: "true", label: "Yes" },
+                    { value: "false", label: "No" },
+                  ]}
+                  onChange={(event) =>
+                    setDetails((current) => ({
+                      ...current,
+                      disposalRequired: event.target.value === "true",
+                    }))
+                  }
+                />
+                <Field
+                  label="Removal / disposal charges"
+                  name="removalCharges"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={details.removalCharges ?? 0}
+                  onChange={(event) =>
+                    setDetails((current) => ({
+                      ...current,
+                      removalCharges: event.target.value,
+                    }))
+                  }
+                />
+                {accessories.length > 0 && (
+                  <div className="field full">
+                    <span>Existing catalog accessories</span>
+                    <div className="checkbox-grid">
+                      {accessories.map((material) => (
+                        <label key={material.id}>
+                          <input
+                            type="checkbox"
+                            checked={(
+                              details.existingAccessoryIds || []
+                            ).includes(material.id)}
+                            onChange={(event) =>
+                              setDetails((current) => ({
+                                ...current,
+                                existingAccessoryIds: event.target.checked
+                                  ? [
+                                      ...(current.existingAccessoryIds || []),
+                                      material.id,
+                                    ]
+                                  : (current.existingAccessoryIds || []).filter(
+                                      (id) => id !== material.id,
+                                    ),
+                              }))
+                            }
+                          />
+                          {material.name}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </>,
+            )}
+          {booking.service === "Roof Repair" &&
+            section(
+              "Existing roof and repair details",
+              <>
+                <Field
+                  label="Existing roofing material"
+                  name="existingMaterialId"
+                  value={details.existingMaterialId || ""}
+                  options={s.materials
+                    .filter((material) => material.active)
+                    .map((material) => ({
+                      value: material.id,
+                      label: `${material.name} · ${material.unit}`,
+                    }))}
+                />
+                <Field
+                  label="Roof type / profile"
+                  name="existingProfile"
+                  options={profiles}
+                  value={details.existingProfile || ""}
+                />
+                <Field
+                  label="Existing roof condition"
+                  name="condition"
+                  options={[
+                    "Good",
+                    "Fair",
+                    "Damaged",
+                    "Severely Damaged",
+                    "Requires Further Assessment",
+                  ]}
+                  value={inspection.condition || ""}
+                />
+                <Field
+                  label="Roof area (SQM)"
+                  name="existingArea"
+                  type="number"
+                  min="0.01"
+                  step="0.01"
+                  value={details.existingArea || ""}
+                />
+                <Field
+                  label="Damaged area (SQM)"
+                  name="damagedArea"
+                  type="number"
+                  min="0.01"
+                  step="0.01"
+                  value={details.damagedArea || ""}
+                />
+                <Field
+                  label="Damage type"
+                  name="damageType"
+                  value={details.damageType || ""}
+                />
+                <Field
+                  label="Damage severity"
+                  name="damageSeverity"
+                  options={["Minor", "Moderate", "Severe"]}
+                  value={details.damageSeverity || ""}
+                />
+                <Field
+                  label="Number of damaged sheets"
+                  name="damagedSheets"
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={details.damagedSheets || ""}
+                />
+                <Field
+                  label="Repair type"
+                  name="repairType"
+                  options={[
+                    "Leak Repair",
+                    "Damaged Roofing Sheet Replacement",
+                    "Loose Roofing Sheet Repair",
+                    "Flashing Repair",
+                    "Ridge Cap Repair",
+                    "Gutter Repair",
+                    "Sealant/Joint Repair",
+                    "Minor Roof Restoration",
+                    "Other",
+                  ]}
+                  value={details.repairType || ""}
+                />
+                <Field
+                  label="Repair charges"
+                  name="repairCharges"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={details.repairCharges ?? 0}
+                  onChange={(event) =>
+                    setDetails((current) => ({
+                      ...current,
+                      repairCharges: event.target.value,
+                    }))
+                  }
+                />
+              </>,
+            )}
+          {section(
+            "Materials and accessories",
+            <>
+              <div className="full">
+                <div className="quote-lines">
+                  <div className="quote-header">
+                    <span>Material</span>
+                    <span>Quantity</span>
+                    <span>Unit</span>
+                    <span>Unit price</span>
+                    <span>Subtotal</span>
+                    <span />
+                  </div>
+                  {items.map((item, index) => (
+                    <div className="quote-line" key={item.materialId}>
+                      <strong>{item.name}</strong>
+                      <input
+                        aria-label={`Quantity for ${item.name}`}
+                        type="number"
+                        min="0.01"
+                        max="1000000"
+                        step="0.01"
+                        value={item.quantity}
+                        disabled={frozen}
+                        onChange={(event) =>
+                          setItems((current) =>
+                            current.map((line, lineIndex) =>
+                              lineIndex === index
+                                ? { ...line, quantity: event.target.value }
+                                : line,
+                            ),
+                          )
+                        }
+                      />
+                      <span>{item.unit}</span>
+                      <span>{money(item.price)}</span>
+                      <b>
+                        {money(
+                          Number(item.quantity || 0) * Number(item.price || 0),
+                        )}
+                      </b>
+                      {!frozen ? (
+                        <button
+                          type="button"
+                          className="icon-btn"
+                          aria-label={`Remove ${item.name}`}
+                          onClick={() =>
+                            setItems((current) =>
+                              current.filter(
+                                (_, lineIndex) => lineIndex !== index,
+                              ),
+                            )
+                          }
+                        >
+                          <Trash2 size={15} />
+                        </button>
+                      ) : (
+                        <span />
+                      )}
+                    </div>
+                  ))}
+                </div>
+                {!frozen && (
+                  <select
+                    className="add-material"
+                    value=""
+                    aria-label="Add material or accessory"
+                    onChange={(event) => addMaterial(event.target.value)}
+                  >
+                    <option value="">
+                      + Add material or accessory from catalog
+                    </option>
+                    {s.materials
+                      .filter(
+                        (material) =>
+                          material.active &&
+                          !items.some(
+                            (item) => item.materialId === material.id,
+                          ),
+                      )
+                      .map((material) => (
+                        <option key={material.id} value={material.id}>
+                          {material.name} · {material.unit} ·{" "}
+                          {money(material.price)}
+                        </option>
+                      ))}
+                  </select>
+                )}
+              </div>
+              {booking.service !== "Roof Installation" && (
+                <Field
+                  label="Additional work"
+                  name="additionalWork"
+                  type="textarea"
+                  value={details.additionalWork || ""}
+                />
+              )}
+              <Field
+                label="Other additional charges"
+                name="additionalCharges"
+                type="number"
+                min="0"
+                step="0.01"
+                value={details.additionalCharges ?? 0}
+                onChange={(event) =>
+                  setDetails((current) => ({
+                    ...current,
+                    additionalCharges: event.target.value,
+                  }))
+                }
+              />
+            </>,
+          )}
+          {section(
+            "Notes, findings, and photos",
+            <>
+              <Field
+                label="Site notes"
+                name="notes"
+                type="textarea"
+                value={inspection.notes || ""}
+              />
+              <Field
+                label="Inspection findings shared with client"
+                name="clientNotes"
+                type="textarea"
+                value={inspection.clientNotes || ""}
+              />
+              <div className="full">
+                <PhotoUpload photos={photos} onChange={setPhotos} />
+              </div>
+            </>,
+          )}
+          {section(
+            "Initial estimate",
+            <>
+              <div className="info full">
+                <strong>Total material cost:</strong> {money(totalMaterials)}
+                <br />
+                {includeRemoval && (
+                  <>
+                    <strong>Removal / disposal charges:</strong>{" "}
+                    {money(removal)}
+                    <br />
+                  </>
+                )}
+                {booking.service === "Roof Repair" && (
+                  <>
+                    <strong>Repair charges:</strong> {money(repair)}
+                    <br />
+                  </>
+                )}
+                <strong>Other additional charges:</strong> {money(additional)}
+                <hr />
+                <strong>Initial Estimated Cost:</strong>{" "}
+                {money(initialEstimate)}
+                <br />
+                <small>
+                  This is an initial estimate, not the final quotation.
+                </small>
+              </div>
+            </>,
+          )}
+          {error && <div className="error full">{error}</div>}
+          <div className="form-footer full">
+            <Button
+              type="button"
+              variant="secondary"
+              disabled={busy}
+              onClick={() => save(false)}
+            >
+              {busy ? "Saving…" : "Save Draft"}
+            </Button>
+            <Button
+              type="button"
+              disabled={busy || !inspection.foremanId}
+              onClick={() => save(true)}
+            >
+              {busy ? "Submitting…" : "Submit for Admin Review"}
+            </Button>
+          </div>
+        </form>
+      ) : (
+        <>
+          <div className="inspection-summary">
+            <span>
+              <b>{inspection.area || "—"}</b> SQM
+            </span>
+            <span>
+              <b>{inspection.linear || "—"}</b> LM
+            </span>
+            <span>{inspection.profile || "Profile not recorded"}</span>
+            <span>
+              {inspection.complexity || "Complexity not recorded"} ·{" "}
+              {inspection.sections || "—"} sections
+            </span>
+            <span>
+              Initial estimate:{" "}
+              <b>{quote ? money(quote.total) : money(initialEstimate)}</b>
+            </span>
+          </div>
+          <div className="info">
+            {submitted
+              ? "Submitted for Admin review. The quotation editor contains the saved material and price snapshots; Admin may adjust it before sending the final quotation to the client."
+              : "This inspection has been completed."}
+          </div>
+          <div className="quote-lines">
+            {(inspection.items || []).map((item) => (
+              <div className="quote-line" key={item.materialId}>
+                <strong>{item.name}</strong>
+                <span>{item.quantity}</span>
+                <span>{item.unit}</span>
+                <span>{money(item.price)}</span>
+                <b>{money(item.quantity * item.price)}</b>
+              </div>
+            ))}
+          </div>
+          <Field
+            label="Site notes"
+            name="notes"
+            type="textarea"
+            value={inspection.notes || ""}
+            disabled
+          />
+          <Field
+            label="Inspection findings"
+            name="clientNotes"
+            type="textarea"
+            value={inspection.clientNotes || ""}
+            disabled
+          />
+          <PhotoList photos={inspection.photos} />
+          {user.role === "Admin" && quote && (
+            <div className="form-footer">
+              <Button
+                onClick={() => setModal({ type: "quotation", record: quote })}
+              >
+                Review initial estimate
+              </Button>
+            </div>
+          )}
+        </>
+      )}
     </Modal>
   );
 }

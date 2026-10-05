@@ -75,6 +75,8 @@ CREATE TABLE IF NOT EXISTS `inspections` (
   `clientNotes` TEXT NULL,
   `accessories` JSON NULL,
   `photos` JSON NULL,
+  `items` JSON NULL,
+  `details` JSON NULL,
   _fields JSON NOT NULL,
   FOREIGN KEY (`bookingId`) REFERENCES `bookings`(id) ON DELETE RESTRICT,
   FOREIGN KEY (`foremanId`) REFERENCES `users`(id) ON DELETE RESTRICT

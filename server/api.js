@@ -60,9 +60,28 @@ export function createApi(store) {
           !["Initial Estimate", "Under Review"].includes(q.status),
       );
     const foreman = s.users.find((u) => u.id === project?.foremanId);
+    const inspections = s.inspections
+      .filter((i) => i.bookingId === b.id)
+      .map((i) =>
+        req.user?.role === "Admin"
+          ? i
+          : {
+              id: i.id,
+              bookingId: i.bookingId,
+              date: i.date,
+              status: i.status,
+              area: i.area,
+              linear: i.linear,
+              sections: i.sections,
+              profile: i.profile,
+              complexity: i.complexity,
+              condition: i.condition,
+              notes: i.clientNotes || "",
+            },
+      );
     res.json({
       booking: b,
-      inspections: s.inspections.filter((i) => i.bookingId === b.id),
+      inspections,
       quotation,
       project,
       foreman: foreman

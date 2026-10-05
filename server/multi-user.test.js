@@ -163,7 +163,7 @@ async function project(env, users) {
   const b = (await env.store.read()).bookings.find(
     (booking) => booking.id === receipt.id,
   );
-  await env.action(users.foreman, "inspection", {
+  await env.action(env.admin, "inspection", {
     id: i.id,
     date: new Date().toISOString().slice(0, 10),
     area: 100,

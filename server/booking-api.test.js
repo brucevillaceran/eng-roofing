@@ -10,7 +10,16 @@ test("tracking API denies pending, rejected and unknown tokens", async (t) => {
       { id: "rejected", token: "rejected-token", status: "Rejected" },
       { id: "approved", token: "approved-token", status: "Approved" },
     ],
-    inspections: [],
+    inspections: [
+      {
+        id: "approved-inspection",
+        bookingId: "approved",
+        status: "Submitted for Review",
+        items: [{ name: "Confidential material", price: 999 }],
+        details: { internalFinding: "not public" },
+        clientNotes: "Client-safe finding",
+      },
+    ],
     quotations: [
       {
         id: "approved-quote",
@@ -61,6 +70,9 @@ test("tracking API denies pending, rejected and unknown tokens", async (t) => {
   assert.equal(approved.status, 200);
   assert.equal(approved.body.booking.id, "approved");
   assert.equal(approved.body.project.id, "approved-project");
+  assert.equal(approved.body.inspections[0].items, undefined);
+  assert.equal(approved.body.inspections[0].details, undefined);
+  assert.equal(approved.body.inspections[0].notes, "Client-safe finding");
 });
 
 test("client workspace withholds pending and rejected tracking tokens", () => {

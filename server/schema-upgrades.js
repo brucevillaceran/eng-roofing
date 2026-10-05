@@ -10,4 +10,8 @@ export const columnUpgrades = {
     updatedAt: "ADD COLUMN `updatedAt` DATETIME(3) NULL",
   },
   payroll: { workedHours: "ADD COLUMN `workedHours` DOUBLE NULL" },
+  inspections: {
+    items: "ADD COLUMN `items` JSON NULL",
+    details: "ADD COLUMN `details` JSON NULL",
+  },
 };

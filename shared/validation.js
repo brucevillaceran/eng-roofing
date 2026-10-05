@@ -234,7 +234,9 @@ export const actionRoles = {
   booking: ["Admin"],
   bookingDecision: ["Admin"],
   inspectionAssign: ["Admin"],
-  inspection: ["Admin", "Foreman"],
+  inspection: ["Admin"],
+  inspectionDraft: ["Admin", "Foreman"],
+  inspectionSubmit: ["Admin", "Foreman"],
   estimate: ["Admin", "Foreman"],
   finalize: ["Admin"],
   quoteDecision: ["Client"],
@@ -268,6 +270,10 @@ const schemas = {
   inspectionAssign: "id foremanId date",
   inspection:
     "id date area linear sections profile complexity condition accessories notes clientNotes photos",
+  inspectionDraft:
+    "id date area linear sections profile complexity condition accessories notes clientNotes photos items details",
+  inspectionSubmit:
+    "id date area linear sections profile complexity condition accessories notes clientNotes photos items details",
   estimate: "inspectionId items charges notes",
   finalize: "id items charges downpayment notes",
   quoteDecision: "id token status name",
@@ -374,29 +380,45 @@ export function validateAction(action, input, { state, user } = {}) {
       date("date", "Inspection date", { min: today() });
       break;
     case "inspection":
-      date("date", "Inspection date", { max: today() });
-      num("area", "Roof area", { min: 0.01, max: limits.measurement });
-      num("linear", "Linear measurement", { max: limits.measurement });
-      num("sections", "Roof sections", {
-        min: 1,
-        max: limits.sections,
-        decimals: 0,
-      });
-      select("profile", "Roof profile", profiles);
-      select("complexity", "Roof complexity", [
-        "Simple",
-        "Moderate",
-        "Complex",
-      ]);
-      select("condition", "Condition", [
-        "New / No Existing Structure",
-        "Good",
-        "Fair",
-        "Needs Repair",
-        "Damaged",
-        "Severely Damaged",
-        "Requires Further Assessment",
-      ]);
+    case "inspectionDraft":
+    case "inspectionSubmit": {
+      const submitting = action === "inspectionSubmit";
+      if (has("date"))
+        date("date", "Inspection date", {
+          ...(submitting ? { max: today() } : {}),
+        });
+      for (const [key, label, options] of [
+        ["area", "Roof area", { min: 0.01, max: limits.measurement }],
+        [
+          "linear",
+          "Linear measurement",
+          { min: 0.01, max: limits.measurement },
+        ],
+        [
+          "sections",
+          "Roof sections",
+          { min: 1, max: limits.sections, decimals: 0 },
+        ],
+      ])
+        if (has(key) && d[key] !== "") num(key, label, options);
+      if (has("profile") && d.profile)
+        select("profile", "Roof profile", profiles);
+      if (has("complexity") && d.complexity)
+        select("complexity", "Roof complexity", [
+          "Simple",
+          "Moderate",
+          "Complex",
+          "Highly Complex",
+        ]);
+      if (has("condition") && d.condition)
+        select("condition", "Condition", [
+          "New / No Existing Structure",
+          "Good",
+          "Fair",
+          "Damaged",
+          "Severely Damaged",
+          "Requires Further Assessment",
+        ]);
       if (has("accessories")) {
         if (
           !Array.isArray(d.accessories) ||
@@ -406,7 +428,159 @@ export function validateAction(action, input, { state, user } = {}) {
           fail("accessories", "Select each accessory at most once.");
         d.accessories.forEach((a) => choice(a, "Accessory", accessories));
       }
+      for (const key of ["notes", "clientNotes"])
+        if (has(key)) str(key, key, limits.text, false);
+      if (has("photos")) {
+        if (!Array.isArray(d.photos) || d.photos.length > 5)
+          fail("photos", "Choose up to 5 photos.");
+        d.photos = d.photos.map((p, i) => photoValue(p, `Photo ${i + 1}`));
+      }
+      if (has("items")) {
+        if (!Array.isArray(d.items) || d.items.length > 200)
+          fail("items", "Choose up to 200 materials.");
+        d.items = d.items.map((item, i) => {
+          keys(item, ["materialId", "quantity"]);
+          return {
+            materialId: identifier(item.materialId, "Material"),
+            quantity:
+              item.quantity === "" || item.quantity === undefined
+                ? ""
+                : numberValue(item.quantity, `Quantity on line ${i + 1}`, {
+                    min: 0.01,
+                    max: limits.quantity,
+                  }),
+          };
+        });
+        if (
+          new Set(d.items.map((item) => item.materialId)).size !==
+          d.items.length
+        )
+          fail("items", "Select each material only once.");
+      }
+      if (has("details")) {
+        const allowed = [
+          "supportingCondition",
+          "supportingNotes",
+          "structuralCondition",
+          "existingMaterialId",
+          "existingProfile",
+          "existingArea",
+          "existingDamage",
+          "existingAccessoryIds",
+          "removalRequired",
+          "replacementScope",
+          "structuralWork",
+          "disposalRequired",
+          "damagedArea",
+          "damageType",
+          "damageSeverity",
+          "damagedSheets",
+          "repairType",
+          "removalCharges",
+          "repairCharges",
+          "additionalCharges",
+          "additionalWork",
+        ];
+        keys(d.details, allowed);
+        const detailChoices = {
+          supportingCondition: [
+            "New / No Existing Structure",
+            "Good",
+            "Fair",
+            "Needs Repair",
+            "Requires Further Assessment",
+          ],
+          structuralCondition: [
+            "Good",
+            "Fair",
+            "Damaged",
+            "Severely Damaged",
+            "Requires Further Assessment",
+          ],
+          existingProfile: profiles,
+          replacementScope: [
+            "Full Roof Replacement",
+            "Partial Roof Replacement",
+          ],
+          structuralWork: [
+            "None",
+            "Minor Repair",
+            "Requires Further Assessment",
+          ],
+          damageSeverity: ["Minor", "Moderate", "Severe"],
+          repairType: [
+            "Leak Repair",
+            "Damaged Roofing Sheet Replacement",
+            "Loose Roofing Sheet Repair",
+            "Flashing Repair",
+            "Ridge Cap Repair",
+            "Gutter Repair",
+            "Sealant/Joint Repair",
+            "Minor Roof Restoration",
+            "Other",
+          ],
+        };
+        for (const [key, options] of Object.entries(detailChoices))
+          if (d.details[key]) choice(d.details[key], key, options);
+        if (d.details.existingMaterialId)
+          d.details.existingMaterialId = identifier(
+            d.details.existingMaterialId,
+            "Existing roof material",
+          );
+        if (d.details.existingAccessoryIds !== undefined) {
+          if (
+            !Array.isArray(d.details.existingAccessoryIds) ||
+            d.details.existingAccessoryIds.length > 50 ||
+            new Set(d.details.existingAccessoryIds).size !==
+              d.details.existingAccessoryIds.length
+          )
+            fail(
+              "existingAccessoryIds",
+              "Select each existing accessory once.",
+            );
+          d.details.existingAccessoryIds = d.details.existingAccessoryIds.map(
+            (id) => identifier(id, "Existing accessory"),
+          );
+        }
+        for (const key of ["removalRequired", "disposalRequired"])
+          if (
+            d.details[key] !== undefined &&
+            typeof d.details[key] !== "boolean"
+          )
+            fail(key, `${key}: choose yes or no.`);
+        for (const [key, label, options] of [
+          [
+            "existingArea",
+            "Existing roof area",
+            { min: 0.01, max: limits.measurement },
+          ],
+          [
+            "damagedArea",
+            "Damaged area",
+            { min: 0.01, max: limits.measurement },
+          ],
+          [
+            "damagedSheets",
+            "Number of damaged sheets",
+            { min: 1, max: limits.quantity, decimals: 0 },
+          ],
+          ["removalCharges", "Removal/disposal charges", { min: 0 }],
+          ["repairCharges", "Repair charges", { min: 0 }],
+          ["additionalCharges", "Additional charges", { min: 0 }],
+        ])
+          if (d.details[key] !== undefined && d.details[key] !== "")
+            d.details[key] = numberValue(d.details[key], label, options);
+        for (const key of [
+          "supportingNotes",
+          "existingDamage",
+          "damageType",
+          "additionalWork",
+        ])
+          if (d.details[key] !== undefined)
+            d.details[key] = textValue(d.details[key], key, limits.text, false);
+      }
       break;
+    }
     case "estimate":
     case "finalize":
       if (action === "estimate" || has("items")) {
@@ -646,6 +820,8 @@ export function validateAction(action, input, { state, user } = {}) {
       bookingDecision: "bookings",
       inspectionAssign: "inspections",
       inspection: "inspections",
+      inspectionDraft: "inspections",
+      inspectionSubmit: "inspections",
       finalize: "quotations",
       quoteDecision: "quotations",
       project: "projects",
