@@ -138,6 +138,48 @@ test("startup upgrades a populated pre-archive database and preserves payroll, u
   }
 });
 
+test("startup adds missing task photo JSON column without changing existing tasks", async () => {
+  const store = await fixture(":memory:", { sample: true });
+  try {
+    const before = await store.read();
+    const task = {
+      id: "historic-task",
+      projectId: before.projects[0].id,
+      name: "Existing roof work",
+      assigneeId: before.projects[0].foremanId,
+      start: before.projects[0].start,
+      due: before.projects[0].end,
+      progress: 40,
+      notes: "Preserve this task",
+      required: true,
+    };
+    await store.transaction((state) => state.tasks.push(task));
+    await store.db.query("ALTER TABLE tasks DROP COLUMN photos");
+
+    await assert.rejects(checkSchema(store.db), /missing column tasks\.photos/);
+    await initializeSchema(store.db);
+    await initializeSchema(store.db);
+    await checkSchema(store.db);
+
+    const [columns] = await store.db.query(
+      "SHOW COLUMNS FROM tasks LIKE 'photos'",
+    );
+    assert.equal(columns.length, 1);
+    assert.match(columns[0].Type, /json|longtext/i);
+    const after = await store.read();
+    assert.deepEqual(
+      after.tasks.find((entry) => entry.id === task.id),
+      task,
+    );
+    assert.deepEqual(
+      after.tasks.filter((entry) => entry.id !== task.id),
+      before.tasks,
+    );
+  } finally {
+    await store.close();
+  }
+});
+
 test("legacy mixed-case archive is renamed without losing rows; ambiguous names fail safely", async (t) => {
   const { db } = await emptyDatabase(t);
   await initializeSchema(db);

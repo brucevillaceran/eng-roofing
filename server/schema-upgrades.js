@@ -15,6 +15,7 @@ export const columnUpgrades = {
     items: "ADD COLUMN `items` JSON NULL",
     details: "ADD COLUMN `details` JSON NULL",
   },
+  tasks: { photos: "ADD COLUMN `photos` JSON NULL" },
   quotations: {
     hardwareAttachments:
       "ADD COLUMN `hardwareAttachments` DOUBLE NULL DEFAULT 0",
