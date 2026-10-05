@@ -783,16 +783,28 @@ export function apply(s, action, d, actor = {}) {
       q.notes = d.notes ?? q.notes;
       q.status = "Awaiting Client";
       const b = get("bookings", q.bookingId);
+      const chargeSummary = [
+        ["Hardware & Attachments", q.hardwareAttachments],
+        ["Installation Fee", q.installationFee],
+        ["Delivery Charges", q.deliveryCharges],
+        ["Insulation", q.insulation],
+        ["Other Charges", q.otherCharges],
+        ["Discount", q.discount],
+      ]
+        .map(
+          ([label, amount]) => `${label}: ₱${Number(amount || 0).toFixed(2)}`,
+        )
+        .join("\n");
       email(
         b,
         "Your final roofing quotation is ready",
-        `Review quotation ${q.id} and approve or reject it using your tracking link.\n\nFinal quotation total: ₱${q.total.toFixed(2)}\nRequired downpayment (50%): ₱${q.downpayment.toFixed(2)}\nRemaining balance after downpayment: ₱${(q.total - q.downpayment).toFixed(2)}`,
+        `Review quotation ${q.id} and approve or reject it using your tracking link.\n\n${chargeSummary}\nFinal quotation total: ₱${q.total.toFixed(2)}\nRequired downpayment (50%): ₱${q.downpayment.toFixed(2)}\nRemaining balance after downpayment: ₱${(q.total - q.downpayment).toFixed(2)}`,
         tracking(b),
       );
       notify(
         "Client",
         "Quotation available",
-        `${q.id} is ready for your review.`,
+        `${q.id} is ready for your review. Final total: ₱${q.total.toFixed(2)} · Required downpayment (50%): ₱${q.downpayment.toFixed(2)}.`,
         [b.clientId],
       );
       break;

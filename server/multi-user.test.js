@@ -189,7 +189,7 @@ async function project(env, users) {
     inspectionId: i.id,
     items: [{ materialId: material.id, quantity: 100 }],
   });
-  const q = (await env.store.read()).quotations[0];
+  let q = (await env.store.read()).quotations[0];
   await env.action(
     users.foreman,
     "estimate",
@@ -200,9 +200,30 @@ async function project(env, users) {
     },
     400,
   );
-  await env.action(env.admin, "finalize", { id: q.id, charges: 5000 });
-  assert.equal(q.total, 55000);
-  assert.equal(q.downpayment, 27500);
+  await env.action(env.admin, "finalize", {
+    id: q.id,
+    hardwareAttachments: 500,
+    installationFee: 2000,
+    deliveryCharges: 300,
+    insulation: 800,
+    otherCharges: 200,
+    discount: 500,
+  });
+  q = (await env.store.read()).quotations[0];
+  assert.equal(q.charges, 3800);
+  assert.equal(q.total, 53300);
+  assert.equal(q.downpayment, 26650);
+  assert.deepEqual(
+    [
+      q.hardwareAttachments,
+      q.installationFee,
+      q.deliveryCharges,
+      q.insulation,
+      q.otherCharges,
+      q.discount,
+    ],
+    [500, 2000, 300, 800, 200, 500],
+  );
   assert.equal((await env.store.read()).payments.length, 0);
   assert.equal((await env.store.read()).projects.length, 0);
   await env.action(
@@ -212,6 +233,23 @@ async function project(env, users) {
     400,
   );
   await env.action(users.client, "finalize", { id: q.id }, 403);
+  const tracking = await env.request(`/api/track/${b.token}`, {
+    identity: users.client,
+  });
+  assert.equal(tracking.status, 200);
+  assert.deepEqual(
+    [
+      tracking.body.quotation.hardwareAttachments,
+      tracking.body.quotation.installationFee,
+      tracking.body.quotation.deliveryCharges,
+      tracking.body.quotation.insulation,
+      tracking.body.quotation.otherCharges,
+      tracking.body.quotation.discount,
+    ],
+    [500, 2000, 300, 800, 200, 500],
+  );
+  assert.equal(tracking.body.quotation.total, 53300);
+  assert.equal(tracking.body.quotation.downpayment, 26650);
   await env.action(
     users.client2,
     "quoteDecision",

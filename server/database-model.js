@@ -20,7 +20,7 @@ export const models = Object.fromEntries(
     inspections:
       "bookingId:ref-bookings foremanId:ref-users serviceType date:date status area:number linear:number sections:int profile complexity condition notes clientNotes accessories:json photos:json items:json details:json",
     quotations:
-      "bookingId:ref-bookings inspectionId:ref-inspections charges:number total:number downpayment:number status notes createdAt:instant",
+      "bookingId:ref-bookings inspectionId:ref-inspections charges:number hardwareAttachments:number installationFee:number deliveryCharges:number insulation:number otherCharges:number discount:number total:number downpayment:number status notes createdAt:instant",
     projects:
       "bookingId:ref-bookings quotationId:ref-quotations name client service type address status progress:number start:date end:date foremanId:ref-users requirements:bool locked:bool createdAt:instant",
     tasks:

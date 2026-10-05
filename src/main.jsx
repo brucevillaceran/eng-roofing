@@ -5765,8 +5765,24 @@ function Tracking({ token }) {
                       ])}
                     />
                     <div className="line-row">
-                      <span>Additional charges</span>
-                      <b>{money(q.charges)}</b>
+                      <span>Hardware &amp; Attachments</span>
+                      <b>{money(q.hardwareAttachments || 0)}</b>
+                    </div>
+                    <div className="line-row">
+                      <span>Installation Fee</span>
+                      <b>{money(q.installationFee || 0)}</b>
+                    </div>
+                    <div className="line-row">
+                      <span>Delivery Charges</span>
+                      <b>{money(q.deliveryCharges || 0)}</b>
+                    </div>
+                    <div className="line-row">
+                      <span>Insulation</span>
+                      <b>{money(q.insulation || 0)}</b>
+                    </div>
+                    <div className="line-row">
+                      <span>Other Charges</span>
+                      <b>{money(q.otherCharges || 0)}</b>
                     </div>
                     <div className="line-row">
                       <span>Discount</span>

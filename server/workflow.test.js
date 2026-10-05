@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import { seed } from "./seed.js";
 import { apply as domainApply, balance } from "./domain.js";
 import { createStore } from "./test-database.js";
+import { encode, decode, models } from "./database-model.js";
+import { visibleState } from "./access.js";
 // Fixtures remain optional sample data; workflow actions now use actual client identities.
 function apply(s, action, data, actor) {
   for (const b of s.bookings) {
@@ -44,6 +46,35 @@ function apply(s, action, data, actor) {
 const admin = { id: "USR-1", role: "Admin" },
   foreman = { id: "USR-2", role: "Foreman" },
   employee = { id: "USR-3", role: "Employee" };
+test("quotation database mapping round-trips all Admin adjustment fields", () => {
+  const record = {
+    id: "QT-MAPPING",
+    bookingId: "BK-1",
+    inspectionId: "IN-1",
+    charges: 38000,
+    hardwareAttachments: 5000,
+    installationFee: 20000,
+    deliveryCharges: 3000,
+    insulation: 8000,
+    otherCharges: 2000,
+    discount: 5000,
+    total: 133000,
+    downpayment: 66500,
+    status: "Awaiting Client",
+    notes: "Mapping test",
+    createdAt: "2026-10-05T13:00:00.000Z",
+  };
+  const definition = models.quotations;
+  const encoded = encode(record, definition);
+  const row = {
+    id: record.id,
+    ...Object.fromEntries(
+      Object.keys(definition).map((key, index) => [key, encoded[index]]),
+    ),
+    _fields: encoded.at(-1),
+  };
+  assert.deepEqual(decode(row, definition), record);
+});
 const today = () => new Date().toISOString().slice(0, 10);
 const booking = () => ({
   name: "Test Roofing Client",
@@ -304,6 +335,62 @@ test("final quotation sets a 50% requested downpayment without recording payment
   });
   assert.equal(oneHundredThirtyThreeThousand.q.downpayment, 66500);
   assert.equal(oneHundredThirtyThreeThousand.q.total, 133000);
+  const clientQuote = visibleState(s, {
+    id: oneHundredThirtyThreeThousand.b.clientId,
+    role: "Client",
+  }).quotations.find(
+    (quote) => quote.id === oneHundredThirtyThreeThousand.q.id,
+  );
+  assert.ok(clientQuote);
+  assert.equal(clientQuote.hardwareAttachments, 5000);
+  assert.equal(clientQuote.installationFee, 20000);
+  assert.equal(clientQuote.deliveryCharges, 3000);
+  assert.equal(clientQuote.insulation, 8000);
+  assert.equal(clientQuote.otherCharges, 2000);
+  assert.equal(clientQuote.discount, 5000);
+  assert.equal(clientQuote.total, 133000);
+  assert.equal(clientQuote.downpayment, 66500);
+  assert.deepEqual(
+    Object.fromEntries(
+      [
+        "hardwareAttachments",
+        "installationFee",
+        "deliveryCharges",
+        "insulation",
+        "otherCharges",
+        "discount",
+      ].map((key) => [key, oneHundredThirtyThreeThousand.q[key]]),
+    ),
+    {
+      hardwareAttachments: 5000,
+      installationFee: 20000,
+      deliveryCharges: 3000,
+      insulation: 8000,
+      otherCharges: 2000,
+      discount: 5000,
+    },
+  );
+  assert.equal(oneHundredThirtyThreeThousand.q.charges, 38000);
+  const quotationEmail = s.emails.find(
+    (email) => email.subject === "Your final roofing quotation is ready",
+  );
+  for (const label of [
+    "Hardware & Attachments",
+    "Installation Fee",
+    "Delivery Charges",
+    "Insulation",
+    "Other Charges",
+    "Discount",
+  ])
+    assert.ok(quotationEmail.message.includes(label));
+  const clientNotification = s.notifications.find(
+    (notification) =>
+      notification.userId === oneHundredThirtyThreeThousand.b.clientId &&
+      notification.title === "Quotation available",
+  );
+  assert.ok(clientNotification);
+  assert.match(clientNotification.message, /Final total: ₱133000\.00/);
+  assert.match(clientNotification.message, /downpayment \(50%\): ₱66500\.00/);
 
   const changed = estimate(s);
   apply(
