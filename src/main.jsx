@@ -4362,7 +4362,14 @@ function QuotationEditor({ record, isNew }) {
     [items, setItems] = useState(
       isNew ? [] : record.items.map((x) => ({ ...x })),
     ),
-    [charges, setCharges] = useState(isNew ? 0 : record.charges),
+    [charges, setCharges] = useState({
+      hardwareAttachments: isNew ? 0 : Number(record.hardwareAttachments || 0),
+      installationFee: isNew ? 0 : Number(record.installationFee || 0),
+      deliveryCharges: isNew ? 0 : Number(record.deliveryCharges || 0),
+      insulation: isNew ? 0 : Number(record.insulation || 0),
+      otherCharges: isNew ? 0 : Number(record.otherCharges || Number(record.charges || 0)),
+      discount: isNew ? 0 : Number(record.discount || 0),
+    }),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
     [showHistory, setShowHistory] = useState(false);
@@ -4374,13 +4381,19 @@ function QuotationEditor({ record, isNew }) {
       isNew ||
       (user.role === "Admin" &&
         ["Initial Estimate", "Under Review"].includes(record.status)),
-    total =
-      items.reduce((a, x) => a + Number(x.quantity || 0) * x.price, 0) +
-      (isNew ? 0 : Number(charges || 0));
+    materialTotal = items.reduce(
+      (a, x) => a + Number(x.quantity || 0) * Number(x.price || 0),
+      0,
+    ),
+    additionalCharges = Object.values(charges).reduce(
+      (sum, value) => sum + Number(value || 0),
+      0,
+    ) - Number(charges.discount || 0),
+    subtotal = materialTotal + additionalCharges,
+    total = subtotal - Number(charges.discount || 0);
   const [downpayment, setDownpayment] = useState(
     isNew ? 0 : record.downpayment,
   );
-  const quoteCharges = isNew ? 0 : Number(charges || 0);
   return (
     <Modal
       wide
@@ -4424,7 +4437,22 @@ function QuotationEditor({ record, isNew }) {
                 materialId,
                 quantity,
               })),
-              charges: isNew ? 0 : charges,
+              ...(isNew
+                ? {}
+                : {
+                    hardwareAttachments: Number(charges.hardwareAttachments || 0),
+                    installationFee: Number(charges.installationFee || 0),
+                    deliveryCharges: Number(charges.deliveryCharges || 0),
+                    insulation: Number(charges.insulation || 0),
+                    otherCharges: Number(charges.otherCharges || 0),
+                    discount: Number(charges.discount || 0),
+                    charges:
+                      Number(charges.hardwareAttachments || 0) +
+                      Number(charges.installationFee || 0) +
+                      Number(charges.deliveryCharges || 0) +
+                      Number(charges.insulation || 0) +
+                      Number(charges.otherCharges || 0),
+                  }),
               notes: form.get("notes"),
             });
           } catch (e) {
@@ -4515,26 +4543,64 @@ function QuotationEditor({ record, isNew }) {
         <div className="quote-totals">
           <div>
             <span>Material subtotal</span>
-            <b>{money(total - quoteCharges)}</b>
+            <b>{money(materialTotal)}</b>
           </div>
           {!isNew && (
-            <div>
-              <span>Additional charges (₱)</span>
-              <input
-                max="1000000000"
-                onInput={(e) => checkField(e.currentTarget)}
-                aria-label="Additional charges"
-                type="number"
-                min="0"
-                step="0.01"
-                disabled={!editable}
-                value={charges}
-                onChange={(e) => setCharges(e.target.value)}
-              />
-            </div>
+            <>
+              {[
+                ["Hardware & Attachments", "hardwareAttachments"],
+                ["Installation Fee", "installationFee"],
+                ["Delivery Charges", "deliveryCharges"],
+                ["Insulation", "insulation"],
+                ["Other Charges", "otherCharges"],
+              ].map(([label, key]) => (
+                <div key={key}>
+                  <span>{label}</span>
+                  <input
+                    max="1000000000"
+                    onInput={(e) => checkField(e.currentTarget)}
+                    aria-label={label}
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    disabled={!editable}
+                    value={charges[key]}
+                    onChange={(e) =>
+                      setCharges((current) => ({
+                        ...current,
+                        [key]: e.target.value,
+                      }))
+                    }
+                  />
+                </div>
+              ))}
+              <div>
+                <span>Discount</span>
+                <input
+                  max="1000000000"
+                  onInput={(e) => checkField(e.currentTarget)}
+                  aria-label="Discount"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  disabled={!editable}
+                  value={charges.discount}
+                  onChange={(e) =>
+                    setCharges((current) => ({
+                      ...current,
+                      discount: e.target.value,
+                    }))
+                  }
+                />
+              </div>
+              <div>
+                <span>Subtotal</span>
+                <b>{money(subtotal)}</b>
+              </div>
+            </>
           )}
           <div className="quote-grand">
-            <span>{isNew ? "Initial material estimate" : "Total quotation"}</span>
+            <span>{isNew ? "Initial material estimate" : "Final quotation total"}</span>
             <strong>{money(total)}</strong>
           </div>
           {!isNew && (
@@ -4545,7 +4611,7 @@ function QuotationEditor({ record, isNew }) {
                 aria-label="Requested downpayment"
                 type="number"
                 min="0"
-                max={total}
+                max={Math.max(0, total)}
                 step="0.01"
                 value={downpayment}
                 disabled={!editable}

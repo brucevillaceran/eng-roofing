@@ -663,10 +663,11 @@ export function apply(s, action, d, actor = {}) {
           false,
           "Foremen can only submit the initial material estimate; labor and additional charges are admin-only.",
         );
-      const charges = 0,
-        total = money(items.reduce((a, x) => a + x.quantity * x.price, 0));
+      const materialTotal = money(
+        items.reduce((a, x) => a + x.quantity * x.price, 0),
+      );
       need(
-        total <= limits.amount,
+        materialTotal <= limits.amount,
         "Quotation total cannot exceed ₱1,000,000,000.",
       );
       const q = {
@@ -674,9 +675,9 @@ export function apply(s, action, d, actor = {}) {
         bookingId: i.bookingId,
         inspectionId: i.id,
         items,
-        charges,
-        total,
-        downpayment: money(total * 0.3),
+        charges: 0,
+        total: materialTotal,
+        downpayment: money(materialTotal * 0.3),
         status: "Initial Estimate",
         notes: d.notes || "",
         createdAt: now(),
@@ -715,10 +716,64 @@ export function apply(s, action, d, actor = {}) {
           };
         });
       }
-      q.charges = num(d.charges ?? q.charges, "Additional charges");
-      q.total = money(
-        q.items.reduce((a, x) => a + x.quantity * x.price, 0) + q.charges,
+      const materialTotal = money(
+        q.items.reduce((a, x) => a + x.quantity * x.price, 0),
       );
+      const namedChargeFields = [
+        ["hardwareAttachments", "Hardware & Attachments"],
+        ["installationFee", "Installation Fee"],
+        ["deliveryCharges", "Delivery Charges"],
+        ["insulation", "Insulation"],
+        ["otherCharges", "Other Charges"],
+      ];
+      const namedCharges = money(
+        namedChargeFields.reduce(
+          (sum, [key, label]) =>
+            sum +
+            (Object.hasOwn(d, key) || Object.hasOwn(q, key)
+              ? num(d[key] ?? q[key] ?? 0, label)
+              : 0),
+          0,
+        ),
+      );
+      const legacyCharges = Object.hasOwn(d, "charges")
+        ? num(d.charges, "Additional charges")
+        : Object.hasOwn(q, "charges")
+          ? num(q.charges, "Additional charges")
+          : 0;
+      const additionalCharges = money(
+        namedChargeFields.some(
+          ([key]) => Object.hasOwn(d, key) || Object.hasOwn(q, key),
+        )
+          ? namedCharges
+          : legacyCharges,
+      );
+      const discount = num(d.discount ?? q.discount ?? 0, "Discount");
+      const subtotal = money(materialTotal + additionalCharges);
+      need(discount <= subtotal, "Discount cannot exceed the subtotal.");
+      q.charges = additionalCharges;
+      q.hardwareAttachments =
+        namedChargeFields.some(([key]) => Object.hasOwn(d, key))
+          ? num(d.hardwareAttachments ?? q.hardwareAttachments ?? 0, "Hardware & Attachments")
+          : q.hardwareAttachments ?? 0;
+      q.installationFee =
+        namedChargeFields.some(([key]) => Object.hasOwn(d, key))
+          ? num(d.installationFee ?? q.installationFee ?? 0, "Installation Fee")
+          : q.installationFee ?? 0;
+      q.deliveryCharges =
+        namedChargeFields.some(([key]) => Object.hasOwn(d, key))
+          ? num(d.deliveryCharges ?? q.deliveryCharges ?? 0, "Delivery Charges")
+          : q.deliveryCharges ?? 0;
+      q.insulation =
+        namedChargeFields.some(([key]) => Object.hasOwn(d, key))
+          ? num(d.insulation ?? q.insulation ?? 0, "Insulation")
+          : q.insulation ?? 0;
+      q.otherCharges =
+        namedChargeFields.some(([key]) => Object.hasOwn(d, key))
+          ? num(d.otherCharges ?? q.otherCharges ?? 0, "Other Charges")
+          : q.otherCharges ?? 0;
+      q.discount = discount;
+      q.total = money(subtotal - discount);
       need(
         q.total <= limits.amount,
         "Quotation total cannot exceed ₱1,000,000,000.",
