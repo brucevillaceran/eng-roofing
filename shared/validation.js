@@ -280,7 +280,7 @@ const schemas = {
     "id items hardwareAttachments installationFee deliveryCharges insulation otherCharges discount charges notes",
   quoteDecision: "id token status name",
   project: "id name foremanId employeeIds start end status",
-  task: "id projectId name assigneeId start due progress notes required",
+  task: "id projectId name assigneeId start due progress notes required photos",
   usage: "id projectId delivered used",
   payment: "projectId amount method date reference remarks",
   complete: "id requirements",
@@ -289,7 +289,7 @@ const schemas = {
   material: "id name unit price category profile thickness active",
   user: "id name role email contact password rate descriptor photo active",
   profile: "name contact password currentPassword",
-  progress: "projectId progress notes",
+  progress: "projectId notes",
   attendanceUpdate: "id hours reason",
   paymentUpdate: "id remarks",
   payrollUpdate: "id deductions reason",
@@ -684,6 +684,11 @@ export function validateAction(action, input, { state, user } = {}) {
       num("progress", "Progress", { max: 100 });
       if (has("required") && typeof d.required !== "boolean")
         fail("required", "Choose whether the task is required.");
+      if (has("photos")) {
+        if (!Array.isArray(d.photos) || d.photos.length > 5)
+          fail("photos", "Choose up to 5 photos.");
+        d.photos = d.photos.map((p, i) => photoValue(p, `Photo ${i + 1}`));
+      }
       break;
     case "usage":
       num("delivered", "Delivered quantity", { max: limits.quantity });
@@ -789,7 +794,7 @@ export function validateAction(action, input, { state, user } = {}) {
         passwordValue(d.password, "Password", { optional: true });
       break;
     case "progress":
-      num("progress", "Progress", { max: 100 });
+      if (has("progress")) num("progress", "Progress", { max: 100 });
       str("notes", "Site update");
       break;
     case "attendanceUpdate":

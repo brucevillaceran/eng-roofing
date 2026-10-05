@@ -1455,6 +1455,19 @@ function average(feedback, key) {
     ) / feedback.length
   );
 }
+function taskSummaryForProject(tasks = []) {
+  const total = tasks.length;
+  const completed = tasks.filter(
+    (task) => Number(task.progress || 0) >= 100,
+  ).length;
+  const percent = total ? Number(((completed / total) * 100).toFixed(2)) : 0;
+  return {
+    total,
+    completed,
+    remaining: total - completed,
+    percent,
+  };
+}
 const descriptions = {
   Users: "Manage the people behind every successful roofing project.",
   Bookings: "From the first request to the first site visit.",
@@ -2540,7 +2553,11 @@ function ModalContent({ modal }) {
   const [selected, setSelected] = useState(r?.projectId || r?.id || ""),
     [chosen, setChosen] = useState(r?.employeeIds || []),
     [bookingService, setBookingService] = useState(r?.service || services[0]),
-    [decisionError, setDecisionError] = useState("");
+    [decisionError, setDecisionError] = useState(""),
+    [taskPhotos, setTaskPhotos] = useState([]);
+  useEffect(() => {
+    if (modal.type === "task") setTaskPhotos(r?.photos || []);
+  }, [modal.type, r?.id]);
   let content,
     title,
     subtitle,
@@ -2839,13 +2856,15 @@ function ModalContent({ modal }) {
     const p = s.projects.find(
       (p) => p.id === (r?.projectId || modal.projectId),
     );
-    content = (
+    const editable = ["Admin", "Foreman"].includes(user.role) && !p.locked;
+    content = editable ? (
       <Form
         onSubmit={(d) =>
           act("task", {
             ...d,
             id: r?.id,
             projectId: p.id,
+            photos: taskPhotos,
             required: d.required === "Yes",
           })
         }
@@ -2896,7 +2915,52 @@ function ModalContent({ modal }) {
           value={r?.required === false ? "No" : "Yes"}
         />
         <Field label="Notes" name="notes" type="textarea" value={r?.notes} />
+        <PhotoUpload photos={taskPhotos} onChange={setTaskPhotos} />
       </Form>
+    ) : (
+      <>
+        <div className="detail-grid">
+          <div>
+            <small>Task</small>
+            <b>{r.name}</b>
+          </div>
+          <div>
+            <small>Assigned to</small>
+            <b>
+              {s.users.find((u) => u.id === r.assigneeId)?.name || "Unassigned"}
+            </b>
+          </div>
+          <div>
+            <small>Schedule</small>
+            <b>
+              {day(r.start)} → {day(r.due)}
+            </b>
+          </div>
+          <div>
+            <small>Progress</small>
+            <b>{r.progress}%</b>
+          </div>
+          <div>
+            <small>Status</small>
+            <b>
+              {r.progress >= 100
+                ? "Completed"
+                : r.progress > 0
+                  ? "Ongoing"
+                  : "Pending"}
+            </b>
+          </div>
+          <div>
+            <small>Required</small>
+            <b>{r.required === false ? "Optional" : "Required"}</b>
+          </div>
+        </div>
+        <div className="info full">
+          <strong>Notes</strong>
+          <p>{r.notes || "No notes."}</p>
+        </div>
+        <PhotoList photos={r.photos || []} />
+      </>
     );
   }
   if (modal.type === "usage") {
@@ -4712,6 +4776,7 @@ function ProjectDetail({ id, initialTab = "Overview" }) {
     },
     pay = paymentStatus(s, p),
     tasks = s.tasks.filter((t) => t.projectId === id),
+    taskSummary = taskSummaryForProject(tasks),
     b = s.bookings.find((b) => b.id === p.bookingId),
     foreman = s.users.find((u) => u.id === p.foremanId),
     canManage = ["Admin", "Foreman"].includes(user.role) && !p.locked;
@@ -4737,11 +4802,11 @@ function ProjectDetail({ id, initialTab = "Overview" }) {
       </div>
       <div className="project-progress">
         <div>
-          <strong>Overall progress</strong>
-          <b>{p.progress}%</b>
+          <strong>Task-based progress</strong>
+          <b>{taskSummary.percent}%</b>
         </div>
         <div className="progress-track">
-          <i style={{ width: `${p.progress}%` }} />
+          <i style={{ width: `${taskSummary.percent}%` }} />
         </div>
       </div>
       <div className="tabs">
@@ -4819,15 +4884,10 @@ function ProjectDetail({ id, initialTab = "Overview" }) {
               onSubmit={(d) => act("progress", { ...d, projectId: p.id }, true)}
               submit="Save site update"
             >
-              <Field
-                label="Overall progress (%)"
-                name="progress"
-                type="number"
-                min="0"
-                max="100"
-                value={p.progress}
-                required
-              />
+              <div className="info full">
+                Project progress is calculated automatically from task
+                completion.
+              </div>
               <Field
                 label="Site update shared with client"
                 name="notes"
@@ -4893,10 +4953,27 @@ function ProjectDetail({ id, initialTab = "Overview" }) {
       )}
       {tab === "Tasks" && (
         <>
+          <div className="line-row">
+            <Badge>{taskSummary.percent}% complete</Badge>
+            <span>
+              {taskSummary.completed} completed · {taskSummary.remaining}{" "}
+              remaining · {taskSummary.total} total
+            </span>
+          </div>
           <DataTable
             headers={["Task", "Assigned to", "Due date", "Progress", ""]}
             rows={tasks.map((t) => [
-              <Name name={t.name} sub={t.required ? "Required" : "Optional"} />,
+              <div>
+                <Name
+                  name={t.name}
+                  sub={t.required ? "Required" : "Optional"}
+                />
+                {t.photos?.length > 0 && (
+                  <small>
+                    {t.photos.length} photo{t.photos.length > 1 ? "s" : ""}
+                  </small>
+                )}
+              </div>,
               s.users.find((u) => u.id === t.assigneeId)?.name,
               day(t.due),
               <Badge>
@@ -4908,14 +4985,12 @@ function ProjectDetail({ id, initialTab = "Overview" }) {
               </Badge>,
               <div className="row-actions">
                 <span>{t.progress}%</span>
-                {canManage && (
-                  <Button
-                    variant="small secondary"
-                    onClick={() => setModal({ type: "task", record: t })}
-                  >
-                    Update
-                  </Button>
-                )}
+                <Button
+                  variant="small secondary"
+                  onClick={() => setModal({ type: "task", record: t })}
+                >
+                  {canManage ? "Update" : "View"}
+                </Button>
               </div>,
             ])}
           />

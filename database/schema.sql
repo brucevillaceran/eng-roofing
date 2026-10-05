@@ -140,6 +140,7 @@ CREATE TABLE IF NOT EXISTS `tasks` (
   `progress` DOUBLE NULL,
   `notes` TEXT NULL,
   `required` BOOLEAN NULL,
+  `photos` JSON NULL,
   _fields JSON NOT NULL,
   FOREIGN KEY (`projectId`) REFERENCES `projects`(id) ON DELETE RESTRICT,
   FOREIGN KEY (`assigneeId`) REFERENCES `users`(id) ON DELETE RESTRICT

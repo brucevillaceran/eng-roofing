@@ -24,7 +24,7 @@ export const models = Object.fromEntries(
     projects:
       "bookingId:ref-bookings quotationId:ref-quotations name client service type address status progress:number start:date end:date foremanId:ref-users requirements:bool locked:bool createdAt:instant",
     tasks:
-      "projectId:ref-projects name assigneeId:ref-users start:date due:date progress:number notes required:bool",
+      "projectId:ref-projects name assigneeId:ref-users start:date due:date progress:number notes required:bool photos:json",
     usage:
       "projectId:ref-projects materialId:ref-materials used:number delivered:number",
     attendance:

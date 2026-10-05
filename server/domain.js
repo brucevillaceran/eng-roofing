@@ -49,6 +49,20 @@ export const bookingCanBeTracked = (booking) =>
     booking &&
     ["Approved", "For Inspection", "Completed"].includes(booking.status),
   );
+export const projectTaskSummary = (state, projectId) => {
+  const tasks = state.tasks.filter((task) => task.projectId === projectId);
+  const total = tasks.length;
+  const completed = tasks.filter(
+    (task) => Number(task.progress || 0) >= 100,
+  ).length;
+  const percent = total ? Number(((completed / total) * 100).toFixed(2)) : 0;
+  return {
+    total,
+    completed,
+    remaining: total - completed,
+    percent,
+  };
+};
 export const balance = (s, p) =>
   money(
     s.quotations.find((q) => q.id === p.quotationId).total -
@@ -977,13 +991,15 @@ export function apply(s, action, d, actor = {}) {
         progress,
         notes: d.notes || "",
         required: d.required !== false,
+        photos: Array.isArray(d.photos) ? d.photos : t.photos || [],
       });
       if (!d.id) s.tasks.push(t);
-      const tasks = s.tasks.filter((x) => x.projectId === p.id);
-      p.progress = Math.round(
-        tasks.reduce((a, x) => a + x.progress, 0) / tasks.length,
+      const summary = projectTaskSummary(s, p.id);
+      p.progress = summary.percent;
+      event(
+        p,
+        `${t.name} · ${progress}% complete · ${summary.completed}/${summary.total} tasks complete`,
       );
-      event(p, `${t.name} · ${progress}% complete`);
       break;
     }
     case "usage": {
@@ -1208,10 +1224,8 @@ export function apply(s, action, d, actor = {}) {
     }
     case "progress": {
       permit("Admin", "Foreman");
-      const p = project(d.projectId),
-        progress = num(d.progress, "Progress");
-      need(progress <= 100, "Progress cannot exceed 100%.");
-      p.progress = progress;
+      const p = project(d.projectId);
+      p.progress = projectTaskSummary(s, p.id).percent;
       event(p, text(d.notes, "Site update"));
       break;
     }
