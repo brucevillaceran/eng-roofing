@@ -213,6 +213,27 @@ test("booking timestamps, token uniqueness, validation and role permissions", ()
     /Service/,
   );
 });
+
+test("guest booking is accepted without creating a client account and keeps a tracking token", () => {
+  const s = seed();
+  const result = domainApply(s, "book", {
+    name: "Guest Roofing Client",
+    email: "guest@example.test",
+    phone: "09171234567",
+    address: "Guest test site",
+    date: "2099-10-10",
+    time: "09:00",
+    service: "Roof Replacement",
+    type: "Residential",
+    description: "Guest booking test",
+  });
+  const b = s.bookings.at(-1);
+  assert.equal(result.id, b.id);
+  assert.equal(b.status, "Pending");
+  assert.equal(b.clientId, undefined);
+  assert.ok(typeof b.token === "string" && b.token.length > 16);
+  assert.equal(s.users.some((u) => u.role === "Client" && u.email === "guest@example.test"), false);
+});
 test("prices are snapshots; admin changes quantities without replacing saved prices", () => {
   const s = seed(),
     { q } = estimate(s);

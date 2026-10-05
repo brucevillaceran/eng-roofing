@@ -54,19 +54,23 @@ export function apply(s, action, d, actor = {}) {
       throw error;
     }
   };
+  const guestBooking = action === "book" && (!actor || !actor.role);
   const account = s.users.find((u) => u.id === actor.id);
-  deny(
-    account &&
-      account.active !== false &&
-      account.role === actor.role &&
-      roles.includes(actor.role),
-    "An active authenticated account is required.",
-  );
-  const permit = (...roles) =>
+  if (!guestBooking)
+    deny(
+      account &&
+        account.active !== false &&
+        account.role === actor.role &&
+        roles.includes(actor.role),
+      "An active authenticated account is required.",
+    );
+  const permit = (...roles) => {
+    if (guestBooking && action === "book") return;
     deny(
       roles.includes(actor.role),
       "This action is unavailable for your role.",
     );
+  };
   if (actionRoles[action]) permit(...actionRoles[action]);
   const get = (table, key) =>
     s[table].find((x) => x.id === key) || fail(`${table} record not found.`);
@@ -158,14 +162,21 @@ export function apply(s, action, d, actor = {}) {
   switch (action) {
     case "book": {
       permit("Admin", "Client");
+      const guest = !actor || !actor.role;
       const owner =
-        actor.role === "Client" ? account : get("users", d.clientId);
-      need(
-        owner.role === "Client" && owner.active !== false,
-        "Choose an active client account.",
-      );
-      const name = personName(owner.name, "Client name"),
-        emailAddress = validEmail(owner.email);
+        actor && actor.role === "Client"
+          ? account
+          : guest
+            ? null
+            : get("users", d.clientId);
+      if (!guest) {
+        need(
+          owner.role === "Client" && owner.active !== false,
+          "Choose an active client account.",
+        );
+      }
+      const name = guest ? personName(d.name, "Client name") : personName(owner.name, "Client name"),
+        emailAddress = guest ? validEmail(d.email) : validEmail(owner.email);
       need(
         /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailAddress),
         "Enter a valid email address.",
@@ -176,7 +187,7 @@ export function apply(s, action, d, actor = {}) {
       );
       const b = {
         id: id("BK"),
-        clientId: owner.id,
+        clientId: guest ? undefined : owner.id,
         name,
         email: emailAddress,
         phone: text(d.phone, "Contact number"),

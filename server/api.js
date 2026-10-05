@@ -38,14 +38,17 @@ export function createApi(store) {
   app.get("/api/state", authenticated, async (req, res) =>
     res.json(visibleState(await readAuthorized(req), req.user)),
   );
-  app.get("/api/track/:token", authenticated, async (req, res) => {
+  app.get("/api/track/:token", async (req, res) => {
     identifier(req.params.token, "Tracking token", 128);
-    const s = visibleState(await readAuthorized(req), req.user),
-      b = s.bookings.find((b) => b.token === req.params.token);
-    if (!b || !["Admin", "Client"].includes(req.user.role))
-      return res
-        .status(404)
-        .json({ error: "Booking not found in your account." });
+    const s = req.user
+      ? visibleState(await readAuthorized(req), req.user)
+      : await store.read();
+    const b = s.bookings.find((b) => b.token === req.params.token);
+    if (!b) return res.status(404).json({ error: "Booking not found." });
+    if (req.user && !["Admin", "Client"].includes(req.user.role))
+      return res.status(404).json({ error: "Booking not found." });
+    if (req.user && req.user.role === "Client" && b.clientId !== req.user.id)
+      return res.status(404).json({ error: "Booking not found in your account." });
     const project = s.projects.find((p) => p.bookingId === b.id),
       quotation = s.quotations.find(
         (q) =>
@@ -73,7 +76,7 @@ export function createApi(store) {
     const { id, name, role, contact, initials, photo } = u;
     res.json({ id, name, role, contact, initials, photo });
   });
-  app.post("/api/action", authenticated, async (req, res) => {
+  app.post("/api/action", async (req, res) => {
     try {
       if (
         typeof req.body.action !== "string" ||
@@ -83,8 +86,10 @@ export function createApi(store) {
       )
         return res.status(400).json({ error: "Invalid action request." });
       const result = await store.transaction(async (s, connection) => {
-        await authorizeSession(connection, req, s);
-        return apply(s, req.body.action, req.body.data, req.user);
+        if (req.body.action !== "book" && !req.user)
+          throw Object.assign(new Error("Please sign in."), { status: 401 });
+        if (req.user) await authorizeSession(connection, req, s);
+        return apply(s, req.body.action, req.body.data, req.user || {});
       });
       res.json(result);
     } catch (e) {

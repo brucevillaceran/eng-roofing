@@ -608,7 +608,12 @@ function App() {
       </div>
     );
   const user = session?.user;
-  if (!user && path !== "/home") return <Authentication onDone={load} />;
+  if (
+    !user &&
+    !["/home", "/book", "/track"].includes(path) &&
+    !path.startsWith("/track/")
+  )
+    return <Authentication onDone={load} />;
   if (
     user &&
     (path === "/login" ||
@@ -3478,13 +3483,14 @@ function PhotoUpload({ photos, onChange, disabled }) {
 }
 function BookingForm({ onDone }) {
   const { act, user, s } = useApp(),
-    [photos, setPhotos] = useState([]);
+    [photos, setPhotos] = useState([]),
+    guest = !user || !user.role;
   return (
     <Form
       onSubmit={async (d) => onDone(await act("book", { ...d, photos }, true))}
       submit="Submit roofing booking"
     >
-      {user.role === "Admin" ? (
+      {user?.role === "Admin" ? (
         <Field
           label="Client account"
           name="clientId"
@@ -3493,6 +3499,11 @@ function BookingForm({ onDone }) {
             .map((u) => ({ value: u.id, label: `${u.name} · ${u.email}` }))}
           required
         />
+      ) : guest ? (
+        <>
+          <Field label="Full name" name="name" required />
+          <Field label="Email" name="email" type="email" required />
+        </>
       ) : (
         <div className="info full">
           Booking for {user.name} · {user.email}
@@ -4879,7 +4890,7 @@ function Tracking({ token }) {
                       <b>{money(data.balance ?? q.total)}</b>
                     </div>
                     <p className="muted">{q.notes}</p>
-                    {user.role === "Client" &&
+                    {user?.role === "Client" &&
                       q.status === "Awaiting Client" && (
                         <div className="form-footer">
                           <Button
@@ -4930,7 +4941,7 @@ function Tracking({ token }) {
                 )}
               </section>
             </div>
-            {user.role === "Client" && p?.status === "Completed" && (
+            {user?.role === "Client" && p?.status === "Completed" && (
               <section className="card padded feedback-form">
                 <h2>How did we do?</h2>
                 <p>Your feedback helps us build a better roofing experience.</p>
